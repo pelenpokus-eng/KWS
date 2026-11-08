@@ -16,5 +16,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setYouTubeAudio: (videoId, muted, volume) => ipcRenderer.invoke('set-youtube-audio', videoId, muted, volume),
   injectChatangoDark: (id) => ipcRenderer.invoke('inject-chatango-dark', id),
   getChatPort: () => ipcRenderer.invoke('get-chat-port'),
+  focusVideoPlayer: (id) => ipcRenderer.invoke('focus-video-player', id),
+  showupLogin: () => ipcRenderer.invoke('showup-login'),
+  showupLogout: () => ipcRenderer.invoke('showup-logout'),
+  onShowupSessionChanged: (cb) => {
+    const h = () => cb()
+    ipcRenderer.on('showup-session-changed', h)
+    return () => ipcRenderer.removeListener('showup-session-changed', h)
+  },
   searchChannels: (query) => ipcRenderer.invoke('search-channels', query),
 })

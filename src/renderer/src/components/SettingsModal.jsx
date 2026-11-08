@@ -4,6 +4,7 @@ export default function SettingsModal({ chatConfig, onSave, onClose }) {
   const [room, setRoom] = useState(chatConfig.room || 'raszei')
   const [customUrl, setCustomUrl] = useState(chatConfig.customUrl || '')
   const [type, setType] = useState(chatConfig.type || 'chatango')
+  const [showupMsg, setShowupMsg] = useState('')
 
   function handleSave() {
     onSave({ type, room: room.trim(), customUrl: customUrl.trim() })
@@ -19,7 +20,7 @@ export default function SettingsModal({ chatConfig, onSave, onClose }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
-        <h2>Ustawienia chatu</h2>
+        <h2>Ustawienia</h2>
 
         <div className="modal-label">Typ chatu</div>
         <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
@@ -70,6 +71,25 @@ export default function SettingsModal({ chatConfig, onSave, onClose }) {
             />
           </>
         )}
+
+        <div className="modal-label" style={{ marginTop: 6 }}>Konto ShowUp</div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
+          <button className="btn" onClick={() => { setShowupMsg(''); window.electronAPI?.showupLogin() }}>
+            Zaloguj do ShowUp
+          </button>
+          <button
+            className="btn"
+            onClick={async () => {
+              const n = await window.electronAPI?.showupLogout()
+              setShowupMsg(n ? 'Wylogowano.' : 'Nie byłeś zalogowany.')
+            }}
+          >
+            Wyloguj
+          </button>
+          <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
+            {showupMsg || 'Otworzy się okno — zaloguj się i je zamknij. Docki ShowUp przeładują się same.'}
+          </span>
+        </div>
 
         <div className="modal-actions">
           <button className="btn" onClick={onClose}>Anuluj</button>

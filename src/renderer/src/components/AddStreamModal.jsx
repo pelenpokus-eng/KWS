@@ -6,6 +6,8 @@ function looksLikeUrl(val) {
   return /[./:]/.test(val)
 }
 
+const CHANNEL_HOST = { twitch: 'twitch.tv', kick: 'kick.com', showup: 'showup.tv' }
+
 function formatViewers(n) {
   if (n == null) return ''
   if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`
@@ -76,8 +78,7 @@ export default function AddStreamModal({ dockIndex, streamHistory = [], onAdd, o
   }
 
   function addChannel(platform, login, displayName) {
-    const base = platform === 'twitch' ? 'https://twitch.tv/' : 'https://kick.com/'
-    const parsed = parseStreamUrl(base + login)
+    const parsed = parseStreamUrl(`https://${CHANNEL_HOST[platform]}/${login}`)
     if (!parsed) return
     const defaultLabel = `${getPlatformMeta(platform).name}: ${displayName || login}`
     onAdd({ ...parsed, label: label.trim() || defaultLabel })
@@ -91,7 +92,13 @@ export default function AddStreamModal({ dockIndex, streamHistory = [], onAdd, o
         { platform: 'kick', login: nickSlug, displayName: query, direct: true },
       ]
     : []
-  const shownResults = results.length ? results : (searching ? [] : directPicks)
+  // ShowUp has no public search — always offer the exact nick as a direct pick
+  const showupPick = isSearch && nickSlug
+    ? { platform: 'showup', login: nickSlug, displayName: query, direct: true }
+    : null
+  const shownResults = results.length
+    ? [...results, ...(showupPick ? [showupPick] : [])]
+    : (searching ? [] : [...directPicks, ...(showupPick ? [showupPick] : [])])
 
   function handleAdd() {
     if (isSearch) {
@@ -173,7 +180,7 @@ export default function AddStreamModal({ dockIndex, streamHistory = [], onAdd, o
           ref={inputRef}
           className="modal-input"
           type="text"
-          placeholder="np. raszei  —  lub https://twitch.tv/kanal, kick.com/kanal ..."
+          placeholder="np. raszei  —  lub https://twitch.tv/kanal, kick.com/kanal, showup.tv/kanal ..."
           value={url}
           onChange={handleUrlChange}
           onKeyDown={handleSearchKey}
@@ -184,7 +191,7 @@ export default function AddStreamModal({ dockIndex, streamHistory = [], onAdd, o
             {query.length < 2 && <div className="search-status">Wpisz co najmniej 2 znaki…</div>}
             {searching && <div className="search-status">Szukam na Twitchu i Kicku…</div>}
             {!searching && query.length >= 2 && !results.length && searchedFor === query && (
-              <div className="search-status">Nic nie znaleziono — możesz dodać kanał bezpośrednio:</div>
+              <div className="search-status">Nic nie znaleziono na Twitchu/Kicku — możesz dodać kanał bezpośrednio:</div>
             )}
             {shownResults.map((c, i) => {
               const m = getPlatformMeta(c.platform)
@@ -202,7 +209,7 @@ export default function AddStreamModal({ dockIndex, streamHistory = [], onAdd, o
                   <span className="search-main">
                     <span className="search-name">{c.displayName}</span>
                     <span className="search-sub">
-                      {c.direct ? `${m.name.toLowerCase()}.${c.platform === 'twitch' ? 'tv' : 'com'}/${c.login}` : (c.category || c.login)}
+                      {c.direct ? `${CHANNEL_HOST[c.platform]}/${c.login}` : (c.category || c.login)}
                     </span>
                   </span>
                   {c.live && (

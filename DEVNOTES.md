@@ -6,6 +6,45 @@ Electron + React (electron-vite) multistream viewer. Chat Chatango osadzony prze
 
 ---
 
+## Postęp prac (ostatnia sesja: 2026-11-08)
+
+### Zrobione i przetestowane
+- **Wyszukiwarka kanałów po nicku (Twitch + Kick)** w oknie „Wybierz stream” — commit `e18fa9e`, wypchnięte na `main`.
+  - Main: IPC `search-channels` (`src/main/index.js`) — Twitch przez nieoficjalne GQL (`gql.twitch.tv`, publiczny Client-ID twitch.tv — decyzja użytkownika), Kick przez `kick.com/api/search` + dokładny lookup `api/v2/channels/{slug}`. Zapytania przez `net.fetch` (stos Chromium, lepiej z Cloudflare na Kicku).
+  - Renderer: `AddStreamModal.jsx` — tekst bez `.`/`/`/`:` = wyszukiwanie (debounce 300 ms, ↑/↓ + Enter), z kropką = URL jak dawniej. Fallback: bezpośrednie pozycje `twitch.tv/nick`, `kick.com/nick`.
+  - ⚠️ Odpowiedzi API nie były weryfikowane z poziomu Claude (blokada uprawnień) — sprawdzić, czy wyniki faktycznie przychodzą z obu platform.
+
+### Zrobione, NIEPRZETESTOWANE (commit lokalny, bez push)
+1. **ShowUp.tv jako źródło** — platforma `showup` w `streamParser.js` (`showup.tv/{nick}`), różowy kolor. Brak embed playera, więc dock ładuje całą stronę pokoju, a main wstrzykuje `FOCUS_VIDEO_JS` (IPC `focus-video-player`): auto-klik 18+/cookies (regex po tekście przycisku), ukrycie reszty strony, największy `<video>` na cały dock. Bez selektorów specyficznych dla ShowUp (nie mogłem pobrać strony do analizy). W wyszukiwarce zawsze jest pozycja „ShowUp” z dokładnym nickiem (ShowUp nie ma API wyszukiwania).
+   - Ryzyka: wideo w cross-origin iframe → skrypt go nie znajdzie; inny tekst przycisku 18+ → nie kliknie.
+2. **Logowanie do ShowUp** — ⚙ Ustawienia → „Zaloguj do ShowUp” (osobne okno, ta sama domyślna sesja co docki → ciasteczka współdzielone) / „Wyloguj” (czyści cookies + storage showup.tv). Po zamknięciu okna docki ShowUp się przeładowują (`showup-session-changed`). Przycisk w toolbarze zmieniony z „⚙ Chat” na „⚙ Ustawienia”.
+3. **Szary ekran (crash docka)** — log pokazał `reason=crashed exitCode=-1073741819` (0xC0000005, access violation w rendererze Chromium) na stronie ShowUp. Dodano:
+   - logowanie `render-process-gone` / `child-process-gone` w main (linie `[render-process-gone] reason=...` w konsoli dev),
+   - auto-reload webview po crashu w `StreamDock.jsx` (backoff 1 s, 2 s…; max 5 crashy/min).
+4. **Aktualizacja Electron 28.3.3 → 45.0.0** (Chromium 120 → nowy) — główna próba naprawy crashy. `frame.routingId` zamienione na `webFrameMain.fromId` w injectorze Chatango. Aplikacja startuje bez błędów, reszta niezweryfikowana.
+
+### Do przetestowania na start następnej sesji
+- [ ] Twitch / Kick / YouTube / ShowUp grają na Electron 45
+- [ ] Wyciszanie i głośność w dockach (szczególnie YouTube — frame injection)
+- [ ] Ciemny motyw Chatango nadal się nakłada
+- [ ] Czy ShowUp nadal crashuje (szary ekran) — jeśli tak: sprawdzić log, rozważyć `disable-accelerated-video-decode`
+- [ ] Czy auto-reload po crashu działa
+- [ ] ShowUp: czy 18+ klika się samo, czy wideo wypełnia dock, czy logowanie działa
+- [ ] Wyszukiwarka: wyniki z Twitcha i Kicka
+- [ ] Po testach: `git push`
+
+### Instalacja Electrona — znany problem
+`npm install` nie rozpakowuje binarki Electrona (instalator kończy się cicho, w `node_modules/electron/dist` tylko `locales`; błąd `Error: Electron uninstall` przy `npm run dev`). Prawdopodobnie `extract-zip` vs Node 26. Obejście (PowerShell):
+```
+Remove-Item -Recurse -Force node_modules\electron\dist
+$zip = Get-ChildItem -Recurse "$env:LOCALAPPDATA\electron\Cache" -Filter electron-v45.0.0-win32-x64.zip | Select -First 1
+Expand-Archive $zip.FullName node_modules\electron\dist -Force
+Move-Item -Force node_modules\electron\dist\electron.d.ts node_modules\electron\electron.d.ts
+Set-Content node_modules\electron\path.txt 'electron.exe' -NoNewline -Encoding ascii
+```
+
+---
+
 ## Aktywne bugi / problemy
 
 ### 1. Czarne kwadraty na miniaturkach zdjęć, gifów i filmów w chacie

@@ -71,9 +71,9 @@ export default function Toolbar({
       <button
         className="btn"
         onClick={onOpenSettings}
-        title="Ustawienia chatu"
+        title="Ustawienia: chat, logowanie do ShowUp"
       >
-        ⚙ Chat
+        ⚙ Ustawienia
       </button>
     </div>
   )

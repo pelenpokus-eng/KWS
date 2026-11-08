@@ -103,6 +103,8 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
         applySize(id)
         window.electronAPI?.setWebContentsMuted(id, !hasAudioRef.current)
         window.electronAPI?.setWebContentsVolume(id, volumeRef.current / 100)
+        // Sites without an embed player: strip the page down to its video
+        if (dock.platform === 'showup') window.electronAPI?.focusVideoPlayer(id)
       } catch {}
     }
 
@@ -113,13 +115,40 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
       if (id) applySize(id)
     }
 
+    // Guest crashed (gray dock) — reload automatically, with backoff so a
+    // stream that crashes in a loop doesn't hammer the CPU.
+    let crashTimes = []
+    let reloadTimer = null
+    const handleGone = (e) => {
+      const now = Date.now()
+      crashTimes = crashTimes.filter(t => now - t < 60000)
+      crashTimes.push(now)
+      if (crashTimes.length > 5) return // give up; user can re-add the stream
+      const delay = 1000 * crashTimes.length
+      reloadTimer = setTimeout(() => {
+        try { wv.reload() } catch { setLiveSrc(null); setTimeout(() => setLiveSrc(dock.embedUrl), 50) }
+      }, delay)
+      console.warn(`[dock] webview gone (${e?.details?.reason || e?.reason || '?'}), reload in ${delay}ms`)
+    }
+
     wv.addEventListener('dom-ready', handleReady)
     wv.addEventListener('did-finish-load', handleFinish)
+    wv.addEventListener('render-process-gone', handleGone)
     return () => {
+      clearTimeout(reloadTimer)
       wv.removeEventListener('dom-ready', handleReady)
       wv.removeEventListener('did-finish-load', handleFinish)
+      wv.removeEventListener('render-process-gone', handleGone)
     }
   }, [liveSrc])
+
+  // ShowUp: reload after login/logout so the dock uses the new session cookies
+  useEffect(() => {
+    if (dock.platform !== 'showup') return
+    return window.electronAPI?.onShowupSessionChanged?.(() => {
+      try { webviewRef.current?.reload() } catch {}
+    })
+  }, [dock.platform])
 
   // Mute/unmute — YouTube uses frame injection by video ID; others use webview setAudioMuted
   useEffect(() => {

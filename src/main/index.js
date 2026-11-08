@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, protocol, webContents, net } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, protocol, webContents, webFrameMain, net } from 'electron'
 import { join } from 'path'
 import Store from 'electron-store'
 import { writeFileSync } from 'fs'
@@ -376,6 +376,123 @@ app.whenReady().then(() => {
     } catch { return null }
   })
 
+  // ── Video focus for sites without an embed player (ShowUp.tv) ───────────
+  // Loads the full room page, then: auto-confirms the 18+ / cookie prompt,
+  // and once a <video> exists hides everything else and stretches the video
+  // over the whole viewport. Selector-free on purpose so site redesigns don't
+  // break it. Until a video shows up, the page is left as-is (e.g. "offline").
+  const FOCUS_VIDEO_JS = `(function(){
+    if (window.__kwsFocus) return;
+    window.__kwsFocus = true;
+    var CONFIRM = /^(wchodz[eę]|wejd[zź]|mam\\s*(uko[nń]czone\\s*)?18|tak,?\\s*mam\\s*18|akceptuj(e|ę)?(\\s+wszystkie)?|zgadzam\\s*si[eę]|rozumiem|ok|i\\s*agree|accept(\\s+all)?|enter)(?![a-z0-9ąćęłńóśźż])/i;
+    function clickPrompts() {
+      var els = document.querySelectorAll('button,a,[role="button"],input[type="button"],input[type="submit"]');
+      for (var i = 0; i < els.length; i++) {
+        var b = els[i];
+        if (b.__kwsClicked || !b.offsetParent) continue;
+        var t = (b.innerText || b.value || '').trim();
+        if (t.length > 40 || !CONFIRM.test(t)) continue;
+        b.__kwsClicked = true;
+        try { b.click(); } catch (e) {}
+      }
+    }
+    function pickVideo() {
+      var best = null, bestArea = 0;
+      document.querySelectorAll('video').forEach(function(v){
+        var r = v.getBoundingClientRect();
+        var a = r.width * r.height;
+        if (a > bestArea || (v.classList.contains('kws-focus') && a >= bestArea)) { best = v; bestArea = a; }
+      });
+      return best;
+    }
+    var styleEl = null;
+    function focus(v) {
+      if (!styleEl) {
+        styleEl = document.createElement('style');
+        styleEl.textContent =
+          'html,body{overflow:hidden!important;background:#000!important}' +
+          'body *{visibility:hidden!important}' +
+          'video.kws-focus{visibility:visible!important;position:fixed!important;inset:0!important;' +
+          'width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;' +
+          'margin:0!important;object-fit:contain!important;background:#000!important;z-index:2147483647!important;transform:none!important}' +
+          '.kws-focus-anc{transform:none!important;filter:none!important;perspective:none!important;contain:none!important;will-change:auto!important}';
+        (document.head || document.documentElement).appendChild(styleEl);
+      }
+      if (!v.classList.contains('kws-focus')) {
+        document.querySelectorAll('.kws-focus').forEach(function(o){ o.classList.remove('kws-focus'); });
+        v.classList.add('kws-focus');
+      }
+      // Fixed positioning breaks inside transformed ancestors — neutralise them
+      for (var p = v.parentElement; p && p !== document.body; p = p.parentElement) p.classList.add('kws-focus-anc');
+      if (v.paused) { try { v.play(); } catch (e) {} }
+    }
+    function tick() {
+      clickPrompts();
+      var v = pickVideo();
+      if (v && (v.readyState > 0 || v.classList.contains('kws-focus'))) focus(v);
+    }
+    tick();
+    setInterval(tick, 1000);
+  })()`
+
+  ipcMain.handle('focus-video-player', async (_, id) => {
+    try {
+      const wc = webContents.fromId(Number(id))
+      if (!wc || wc.isDestroyed()) return
+      const inject = () => { wc.executeJavaScript(FOCUS_VIDEO_JS).catch(() => {}) }
+      inject()
+      // Re-inject after navigations (age gate often reloads the page)
+      if (!wc._kwsFocusAttached) {
+        wc._kwsFocusAttached = true
+        wc.on('dom-ready', inject)
+      }
+    } catch {}
+  })
+
+  // ── ShowUp account login ────────────────────────────────────────────────
+  // The login window uses the default session — the same one the dock
+  // webviews use — so the cookies it gets are shared with every ShowUp dock.
+  let showupLoginWin = null
+
+  function notifyShowupSession() {
+    if (!mainWindow.isDestroyed()) mainWindow.webContents.send('showup-session-changed')
+  }
+
+  ipcMain.handle('showup-login', () => {
+    if (showupLoginWin && !showupLoginWin.isDestroyed()) {
+      showupLoginWin.focus()
+      return
+    }
+    showupLoginWin = new BrowserWindow({
+      width: 1100,
+      height: 800,
+      parent: mainWindow,
+      title: 'Zaloguj do ShowUp — zamknij okno po zalogowaniu',
+      backgroundColor: '#0a0a0a',
+      autoHideMenuBar: true,
+      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+    })
+    // Keep our title so the hint stays visible
+    showupLoginWin.on('page-title-updated', e => e.preventDefault())
+    showupLoginWin.loadURL('https://showup.tv/')
+    showupLoginWin.on('closed', () => {
+      showupLoginWin = null
+      notifyShowupSession() // docks reload and pick up the new cookies
+    })
+  })
+
+  ipcMain.handle('showup-logout', async () => {
+    const ses = mainWindow.webContents.session
+    const cookies = await ses.cookies.get({ domain: 'showup.tv' })
+    await Promise.all(cookies.map(c => {
+      const host = c.domain.replace(/^\./, '')
+      return ses.cookies.remove(`http${c.secure ? 's' : ''}://${host}${c.path || '/'}`, c.name).catch(() => {})
+    }))
+    await ses.clearStorageData({ origin: 'https://showup.tv', storages: ['localstorage', 'indexdb', 'cachestorage', 'serviceworkers'] }).catch(() => {})
+    notifyShowupSession()
+    return cookies.length
+  })
+
   // ── Channel search (Twitch + Kick) by creator nickname ──────────────────
   // Runs in main process to avoid CORS. net.fetch uses Chromium's network
   // stack, which gets through Kick's Cloudflare more reliably than Node fetch.
@@ -612,14 +729,10 @@ app.whenReady().then(() => {
       // Inject into every future frame as it finishes loading (catches async iframes)
       if (!wc._kwsDarkAttached) {
         wc._kwsDarkAttached = true
-        wc.on('did-frame-finish-load', async (_, _isMain, _pid, routingId) => {
+        wc.on('did-frame-finish-load', async (_, _isMain, pid, routingId) => {
           try {
-            for (const frame of wc.mainFrame.framesInSubtree) {
-              if (frame.routingId === routingId) {
-                await injectIntoFrame(frame, cssScript)
-                break
-              }
-            }
+            const frame = webFrameMain.fromId(pid, routingId)
+            if (frame) await injectIntoFrame(frame, cssScript)
           } catch {}
         })
       }
@@ -653,6 +766,17 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+})
+
+// Log why a renderer/webview died (gray dock = crashed guest) so we can tell
+// out-of-memory from GPU/media crashes.
+app.on('render-process-gone', (_, wc, details) => {
+  let url = ''
+  try { url = wc.getURL() } catch {}
+  console.log(`[render-process-gone] reason=${details.reason} exitCode=${details.exitCode} url=${url}`)
+})
+app.on('child-process-gone', (_, details) => {
+  console.log(`[child-process-gone] type=${details.type} reason=${details.reason} exitCode=${details.exitCode} name=${details.name || ''}`)
 })
 
 app.on('window-all-closed', () => {

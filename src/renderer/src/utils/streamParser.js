@@ -70,6 +70,22 @@ export function parseStreamUrl(rawUrl) {
       }
     }
 
+    // ShowUp.tv — no embeddable player, so the full room page is loaded in the
+    // webview and main process isolates the <video> (see 'focus-video-player')
+    if (host === 'showup.tv') {
+      const channel = parsed.pathname.split('/').filter(Boolean)[0]
+      if (channel) {
+        return {
+          platform: 'showup',
+          type: 'live',
+          id: channel,
+          label: `ShowUp: ${channel}`,
+          originalUrl: url,
+          embedUrl: `https://showup.tv/${channel}`,
+        }
+      }
+    }
+
     // Custom / fallback
     return {
       platform: 'custom',
@@ -88,6 +104,7 @@ export const PLATFORM_META = {
   twitch:  { color: '#9146ff', emoji: '●', name: 'Twitch' },
   youtube: { color: '#ff0000', emoji: '●', name: 'YouTube' },
   kick:    { color: '#53fc18', emoji: '●', name: 'Kick' },
+  showup:  { color: '#ff3d7f', emoji: '●', name: 'ShowUp' },
   custom:  { color: '#6366f1', emoji: '●', name: 'Custom' },
 }
 
