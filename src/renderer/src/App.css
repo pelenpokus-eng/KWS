@@ -1,0 +1,610 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg-0: #080808;
+  --bg-1: #101010;
+  --bg-2: #181818;
+  --bg-3: #222222;
+  --bg-4: #2c2c2c;
+  --text-1: #f0f0f0;
+  --text-2: #9a9a9a;
+  --text-3: #555555;
+  --accent: #8b5cf6;
+  --accent-h: #7c3aed;
+  --accent-glow: rgba(139, 92, 246, 0.35);
+  --success: #10b981;
+  --danger: #ef4444;
+  --border: #242424;
+  --border-h: #3a3a3a;
+  --radius: 6px;
+  --radius-sm: 4px;
+}
+
+body {
+  background: var(--bg-0);
+  color: var(--text-1);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+  height: 100vh;
+  user-select: none;
+}
+
+/* ── App shell ─────────────────────────────────────────────── */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.app-body {
+  display: flex;
+  height: calc(100vh - 46px);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+/* ── Toolbar ───────────────────────────────────────────────── */
+.toolbar {
+  height: 46px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  gap: 6px;
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+}
+
+.toolbar > * { -webkit-app-region: no-drag; }
+
+.toolbar-logo {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--accent);
+  letter-spacing: -0.3px;
+  margin-right: 4px;
+}
+
+.toolbar-sep {
+  width: 1px;
+  height: 22px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+.toolbar-spacer { flex: 1; }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+}
+.btn:hover { background: var(--bg-3); color: var(--text-1); border-color: var(--border-h); }
+.btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn.active:hover { background: var(--accent-h); }
+.btn.icon-only { padding: 0; width: 30px; justify-content: center; font-size: 15px; }
+.btn.danger:hover { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+.layout-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.layout-toggle .btn {
+  border: none;
+  border-radius: 0;
+  margin: 0;
+}
+.layout-toggle .btn:not(:last-child) {
+  border-right: 1px solid var(--border);
+}
+
+/* ── Dock grid ─────────────────────────────────────────────── */
+.dock-grid {
+  flex: 1;
+  display: grid;
+  gap: 2px;
+  background: #050505;
+  min-width: 0;
+  overflow: hidden;
+  height: calc(100vh - 46px);
+}
+.dock-grid.single  { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+.dock-grid.quad    { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.dock-grid.theater { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+
+/* ── Stream dock ───────────────────────────────────────────── */
+.stream-dock {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
+  overflow: hidden;
+  min-height: 0;
+  min-width: 0;
+}
+
+.stream-dock.has-audio {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.stream-dock.drag-over {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: rgba(139,92,246,0.08);
+}
+
+/* During drag: disable pointer capture on iframes so dragover fires on parent */
+body.is-dragging iframe {
+  pointer-events: none !important;
+}
+
+/* Stream chat overlay resize handle */
+.dock-chat-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 280px;
+  width: 4px;
+  cursor: col-resize;
+  z-index: 7;
+  background: transparent;
+}
+.dock-chat-resize:hover { background: var(--accent); opacity: 0.5; }
+
+.stream-dock.empty-dock {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  cursor: pointer;
+  border: 2px dashed var(--border);
+  background: var(--bg-0);
+  transition: all 0.15s;
+}
+.stream-dock.empty-dock:hover {
+  border-color: var(--accent);
+  background: rgba(139,92,246,0.05);
+}
+.stream-dock.empty-dock .add-icon {
+  font-size: 28px;
+  color: var(--text-3);
+  line-height: 1;
+  transition: color 0.15s;
+}
+.stream-dock.empty-dock:hover .add-icon { color: var(--accent); }
+.stream-dock.empty-dock .add-hint {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.dock-webview {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+/* ── Dock controls overlay ─────────────────────────────────── */
+.dock-controls {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 10px 10px 48px;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.88) 0%, rgba(0,0,0,0.5) 60%, transparent 100%);
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.18s;
+  pointer-events: none;
+  z-index: 10;
+}
+.stream-dock:hover .dock-controls {
+  opacity: 1;
+  /* background gradient stays non-interactive — events pass through to iframe */
+}
+.stream-dock:hover .dock-controls-left,
+.stream-dock:hover .dock-controls-right {
+  pointer-events: auto;
+}
+
+.dock-controls-left {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  overflow: hidden;
+}
+.dock-controls-right {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.platform-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: rgba(0,0,0,0.7);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255,255,255,0.14);
+  white-space: nowrap;
+  flex-shrink: 0;
+  filter: drop-shadow(0 1px 4px rgba(0,0,0,0.9));
+}
+.platform-dot { font-size: 8px; }
+
+.dock-label {
+  font-size: 12px;
+  color: var(--text-1);
+  opacity: 0.95;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 1px 4px rgba(0,0,0,1), 0 0 8px rgba(0,0,0,0.9);
+}
+
+.dock-drag-handle {
+  cursor: grab;
+  color: rgba(255,255,255,0.65);
+  font-size: 17px;
+  line-height: 1;
+  padding: 2px 5px;
+  flex-shrink: 0;
+  user-select: none;
+  transition: color 0.12s;
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,0.9));
+}
+.dock-drag-handle:hover { color: #fff; }
+.dock-drag-handle:active { cursor: grabbing; }
+
+.dock-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: var(--radius-sm);
+  background: rgba(0,0,0,0.65);
+  backdrop-filter: blur(6px);
+  color: rgba(255,255,255,0.85);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.12s;
+  flex-shrink: 0;
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,0.9));
+}
+.dock-btn:hover { background: rgba(255,255,255,0.18); color: #fff; border-color: rgba(255,255,255,0.3); }
+.dock-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.dock-btn.danger:hover { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+/* ── Volume hover-expand control (YouTube-style) ───────────── */
+.vol-control {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 0;
+}
+
+/* Track slides in from the left of the button */
+.vol-track {
+  overflow: hidden;
+  width: 0;
+  min-width: 0;
+  opacity: 0;
+  transition: width 0.22s ease, opacity 0.18s ease;
+  pointer-events: none;
+}
+.vol-track-inner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 136px;
+  padding-right: 6px;
+  white-space: nowrap;
+}
+.vol-control:hover .vol-track {
+  width: 136px;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.vol-pct {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.75);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  min-width: 28px;
+  text-align: right;
+}
+
+.vol-slider-h {
+  -webkit-appearance: none;
+  width: 70px;
+  height: 13px;
+  background: transparent;
+  outline: none;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.vol-slider-h::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.25);
+}
+.vol-slider-h::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 13px;
+  height: 13px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: #fff;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+}
+
+/* ── Chat panel ────────────────────────────────────────────── */
+.chat-panel {
+  display: flex;
+  flex-direction: column;
+  width: 310px;
+  min-width: 200px;
+  max-width: 500px;
+  border-left: 1px solid var(--border);
+  background: var(--bg-1);
+  flex-shrink: 0;
+  position: relative;
+}
+
+.chat-resize-handle {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 20;
+}
+.chat-resize-handle:hover, .chat-resize-handle.dragging { background: var(--accent); opacity: 0.5; }
+
+.chat-source-bar {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.chat-source-btn {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-3);
+  color: var(--text-2);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.1s;
+}
+.chat-source-btn:hover { background: var(--bg-4); color: var(--text-1); }
+.chat-source-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+.chat-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--bg-2);
+}
+.chat-room-input {
+  flex: 1;
+  height: 26px;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-1);
+  font-size: 12px;
+  padding: 0 8px;
+  outline: none;
+}
+.chat-room-input:focus { border-color: var(--accent); }
+
+.chat-webview-wrap {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: #0d0d0d;
+}
+.chat-webview {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+.chat-reactions {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+  background: var(--bg-2);
+}
+.reaction-btn {
+  font-size: 18px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  transition: background 0.1s, transform 0.1s;
+  line-height: 1;
+}
+.reaction-btn:hover { background: var(--bg-4); transform: scale(1.2); }
+.reaction-btn:active { transform: scale(0.9); }
+
+/* ── Modal ─────────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  backdrop-filter: blur(3px);
+}
+.modal {
+  background: var(--bg-2);
+  border: 1px solid var(--border-h);
+  border-radius: var(--radius);
+  padding: 24px;
+  width: 420px;
+  max-width: 90vw;
+}
+.modal h2 {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 18px;
+  color: var(--text-1);
+}
+.modal-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 5px;
+}
+.modal-input {
+  width: 100%;
+  height: 34px;
+  background: var(--bg-0);
+  border: 1px solid var(--border-h);
+  border-radius: var(--radius-sm);
+  color: var(--text-1);
+  font-size: 13px;
+  padding: 0 10px;
+  outline: none;
+  margin-bottom: 14px;
+}
+.modal-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+.modal-input::placeholder { color: var(--text-3); }
+
+.modal-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-3);
+  margin-bottom: 14px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.modal-error {
+  font-size: 12px;
+  color: var(--danger);
+  margin-bottom: 10px;
+}
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+/* ── Misc ──────────────────────────────────────────────────── */
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+/* Theater mode dock index indicator */
+.theater-index-hidden { display: none !important; }
+
+/* Shortcut hint in empty dock */
+.shortcut-hint {
+  font-size: 10px;
+  color: var(--text-3);
+  font-family: monospace;
+}
+
+/* ── Stream history list ───────────────────────────────────── */
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 180px;
+  overflow-y: auto;
+  margin-bottom: 4px;
+  padding-right: 2px;
+}
+.history-list::-webkit-scrollbar { width: 4px; }
+.history-list::-webkit-scrollbar-track { background: transparent; }
+.history-list::-webkit-scrollbar-thumb { background: var(--border-h); border-radius: 2px; }
+
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-3);
+  border: 1px solid transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.1s;
+  width: 100%;
+}
+.history-item:hover {
+  background: var(--bg-4);
+  border-color: var(--border-h);
+}
+.history-dot { font-size: 8px; flex-shrink: 0; }
+.history-platform {
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+  min-width: 46px;
+}
+.history-label {
+  font-size: 12px;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
