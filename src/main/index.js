@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, protocol, webContents } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, protocol, webContents, net } from 'electron'
 import { join } from 'path'
 import Store from 'electron-store'
 import { writeFileSync } from 'fs'
@@ -374,6 +374,106 @@ app.whenReady().then(() => {
       const data = await res.json()
       return data?.chatroom?.id ?? null
     } catch { return null }
+  })
+
+  // ── Channel search (Twitch + Kick) by creator nickname ──────────────────
+  // Runs in main process to avoid CORS. net.fetch uses Chromium's network
+  // stack, which gets through Kick's Cloudflare more reliably than Node fetch.
+  const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+  // Public client ID of the twitch.tv web app (unofficial, used by streamlink etc.)
+  const TWITCH_GQL_CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko'
+
+  async function fetchJson(url, opts = {}, timeoutMs = 6000) {
+    const ctrl = new AbortController()
+    const t = setTimeout(() => ctrl.abort(), timeoutMs)
+    try {
+      const res = await net.fetch(url, { ...opts, signal: ctrl.signal })
+      if (!res.ok) return null
+      return await res.json()
+    } catch { return null } finally { clearTimeout(t) }
+  }
+
+  function twitchGql(query, variables) {
+    return fetchJson('https://gql.twitch.tv/gql', {
+      method: 'POST',
+      headers: { 'Client-ID': TWITCH_GQL_CLIENT_ID, 'Content-Type': 'application/json', 'User-Agent': BROWSER_UA },
+      body: JSON.stringify({ query, variables }),
+    })
+  }
+
+  const TWITCH_USER_FIELDS = 'login displayName profileImageURL(width: 70) stream { viewersCount game { displayName } }'
+
+  function mapTwitchUser(u) {
+    if (!u?.login) return null
+    return {
+      platform: 'twitch',
+      login: u.login,
+      displayName: u.displayName || u.login,
+      avatar: u.profileImageURL || null,
+      live: !!u.stream,
+      viewers: u.stream?.viewersCount ?? null,
+      category: u.stream?.game?.displayName ?? null,
+    }
+  }
+
+  async function searchTwitch(q) {
+    const login = q.toLowerCase().replace(/[^a-z0-9_]/g, '')
+    const [search, exact] = await Promise.all([
+      twitchGql(
+        `query($q: String!) { searchFor(userQuery: $q, platform: "web", options: { targets: [{ index: CHANNEL, limit: 8 }] }) { channels { edges { item { ... on User { ${TWITCH_USER_FIELDS} } } } } } }`,
+        { q }
+      ),
+      login ? twitchGql(`query($l: String!) { user(login: $l) { ${TWITCH_USER_FIELDS} } }`, { l: login }) : null,
+    ])
+    const list = (search?.data?.searchFor?.channels?.edges || []).map(e => mapTwitchUser(e?.item))
+    return [mapTwitchUser(exact?.data?.user), ...list].filter(Boolean)
+  }
+
+  function mapKickChannel(c) {
+    const slug = c?.slug || c?.channel?.slug
+    if (!slug) return null
+    const user = c.user || c.channel?.user || {}
+    const ls = c.livestream || null
+    return {
+      platform: 'kick',
+      login: slug,
+      displayName: user.username || c.username || slug,
+      avatar: user.profile_pic || user.profilepic || c.profile_pic || null,
+      live: !!(ls?.is_live ?? c.is_live ?? c.isLive ?? ls),
+      viewers: ls?.viewer_count ?? ls?.viewers ?? null,
+      category: ls?.categories?.[0]?.name ?? null,
+    }
+  }
+
+  async function searchKick(q) {
+    const slug = q.toLowerCase().replace(/[^a-z0-9_-]/g, '')
+    const headers = { 'Accept': 'application/json', 'User-Agent': BROWSER_UA }
+    const [search, exact] = await Promise.all([
+      fetchJson(`https://kick.com/api/search?searched_word=${encodeURIComponent(q)}`, { headers }),
+      slug ? fetchJson(`https://kick.com/api/v2/channels/${encodeURIComponent(slug)}`, { headers }) : null,
+    ])
+    const raw = Array.isArray(search?.channels) ? search.channels : (Array.isArray(search) ? search : [])
+    return [mapKickChannel(exact), ...raw.map(mapKickChannel)].filter(Boolean)
+  }
+
+  function dedupe(list) {
+    const seen = new Set()
+    return list.filter(c => {
+      const k = c.login.toLowerCase()
+      if (seen.has(k)) return false
+      seen.add(k)
+      return true
+    }).slice(0, 8)
+  }
+
+  ipcMain.handle('search-channels', async (_, rawQuery) => {
+    const q = String(rawQuery || '').trim().slice(0, 50)
+    if (q.length < 2) return { twitch: [], kick: [] }
+    const [twitch, kick] = await Promise.all([
+      searchTwitch(q).catch(() => []),
+      searchKick(q).catch(() => []),
+    ])
+    return { twitch: dedupe(twitch), kick: dedupe(kick) }
   })
 
   const CHATANGO_DARK_CSS = `

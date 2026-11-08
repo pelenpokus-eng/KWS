@@ -16,4 +16,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setYouTubeAudio: (videoId, muted, volume) => ipcRenderer.invoke('set-youtube-audio', videoId, muted, volume),
   injectChatangoDark: (id) => ipcRenderer.invoke('inject-chatango-dark', id),
   getChatPort: () => ipcRenderer.invoke('get-chat-port'),
+  searchChannels: (query) => ipcRenderer.invoke('search-channels', query),
 })

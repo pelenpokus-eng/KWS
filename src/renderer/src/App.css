@@ -608,3 +608,87 @@ body.is-dragging iframe {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ── Channel search results (Add stream modal) ─────────────── */
+.search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 300px;
+  overflow-y: auto;
+  margin: -6px 0 14px;
+  padding-right: 2px;
+}
+.search-results::-webkit-scrollbar { width: 4px; }
+.search-results::-webkit-scrollbar-thumb { background: var(--border-h); border-radius: 2px; }
+.search-status {
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 4px 2px;
+}
+.search-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-3);
+  border: 1px solid transparent;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: background 0.1s, border-color 0.1s;
+}
+.search-item.active {
+  background: var(--bg-4);
+  border-color: var(--border-h);
+}
+.search-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  object-fit: cover;
+  background: var(--bg-4);
+}
+.search-avatar-ph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+}
+.search-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.search-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-sub {
+  font-size: 10px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-live {
+  font-size: 10px;
+  font-weight: 600;
+  color: #ff4d4d;
+  flex-shrink: 0;
+}
+.search-platform {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border: 1px solid;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
