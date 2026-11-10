@@ -136,3 +136,9 @@ export function getChatUrl(dock) {
   }
   return null
 }
+
+// Stable identity of a stream across embed-URL format changes
+export function streamKey(s) {
+  if (!s) return ''
+  return s.platform && s.id ? `${s.platform}:${String(s.id).toLowerCase()}` : (s.originalUrl || s.embedUrl || '')
+}

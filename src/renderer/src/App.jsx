@@ -3,7 +3,7 @@ import Toolbar from './components/Toolbar'
 import DockGrid from './components/DockGrid'
 import ChatPanel from './components/ChatPanel'
 import SettingsModal from './components/SettingsModal'
-import { parseStreamUrl } from './utils/streamParser'
+import { parseStreamUrl, streamKey } from './utils/streamParser'
 import './App.css'
 
 function migrateChatConfig(cfg) {
@@ -37,6 +37,7 @@ const DEFAULT_STATE = {
   activeAudioDock: 0,
   multiAudio: false,
   streamHistory: [],
+  favorites: [],
 }
 
 export default function App() {
@@ -45,6 +46,7 @@ export default function App() {
   const [chatConfig, setChatConfig] = useState(DEFAULT_STATE.chatConfig)
   const [activeAudioDock, setActiveAudioDock] = useState(DEFAULT_STATE.activeAudioDock)
   const [streamHistory, setStreamHistory] = useState(DEFAULT_STATE.streamHistory)
+  const [favorites, setFavorites] = useState(DEFAULT_STATE.favorites)
   const [multiAudio, setMultiAudio] = useState(DEFAULT_STATE.multiAudio)
   const [muteAll, setMuteAll] = useState(false)
   const [enabledDocks, setEnabledDocks] = useState(() => new Set([0]))
@@ -66,6 +68,7 @@ export default function App() {
         if (state.chatConfig) setChatConfig(migrateChatConfig(state.chatConfig) ?? DEFAULT_STATE.chatConfig)
         if (typeof state.activeAudioDock === 'number') setActiveAudioDock(state.activeAudioDock)
         if (Array.isArray(state.streamHistory)) setStreamHistory(state.streamHistory)
+        if (Array.isArray(state.favorites)) setFavorites(state.favorites)
         if (typeof state.multiAudio === 'boolean') setMultiAudio(state.multiAudio)
       }
       setLoaded(true)
@@ -89,8 +92,9 @@ export default function App() {
       activeAudioDock,
       multiAudio,
       streamHistory,
+      favorites,
     })
-  }, [docks, layout, chatConfig, activeAudioDock, multiAudio, loaded])
+  }, [docks, layout, chatConfig, activeAudioDock, multiAudio, streamHistory, favorites, loaded])
 
   // Always on top
   useEffect(() => {
@@ -144,6 +148,24 @@ export default function App() {
         addToHistory(payload)
         setActiveAudioDock(prev => prev === null ? dockIndex : prev)
         break
+
+      case 'removeHistory': {
+        const key = streamKey(payload)
+        setStreamHistory(prev => prev.filter(s => streamKey(s) !== key))
+        break
+      }
+
+      case 'toggleFavorite': {
+        const key = streamKey(payload)
+        if (!key) break
+        setFavorites(prev => prev.some(f => streamKey(f) === key)
+          ? prev.filter(f => streamKey(f) !== key)
+          : [...prev, {
+              embedUrl: payload.embedUrl, platform: payload.platform, label: payload.label,
+              id: payload.id, originalUrl: payload.originalUrl,
+            }])
+        break
+      }
 
       case 'remove':
         setDocks(prev => {
@@ -247,6 +269,7 @@ export default function App() {
           muteAll={muteAll}
           nativeMuted={nativeMuted}
           streamHistory={streamHistory}
+          favorites={favorites}
           onDockAction={handleDockAction}
         />
         <ChatPanel

@@ -25,10 +25,24 @@
     "appId": "eu.raszei.multistream",
     "productName": "KWS MultiStream",
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.ico"
     },
     "files": [
-      "out/**/*"
+      "out/**/*",
+      "resources/**"
+    ],
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "KWS MultiStream",
+      "runAfterFinish": true
+    },
+    "asarUnpack": [
+      "resources/**"
     ],
     "directories": {
       "output": "dist"

@@ -1,6 +1,18 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
-import { getPlatformMeta } from '../utils/streamParser'
+import { getPlatformMeta, streamKey } from '../utils/streamParser'
 import AddStreamModal from './AddStreamModal'
+
+// Twitch shows a "mature content" gate (Zacznij oglądać / Start Watching) that
+// keeps the stream paused+muted. Docks don't take mouse input, so click it for
+// the user — checked every second because it can appear after load too.
+const TWITCH_GATE_JS = `(function(){
+  if (window.__kwsGate) return;
+  window.__kwsGate = true;
+  setInterval(function(){
+    var b = document.querySelector('[data-a-target="content-classification-gate-overlay-start-watching-button"]');
+    if (b && !b.__kwsClicked) { b.__kwsClicked = true; b.click(); }
+  }, 1000);
+})()`
 
 function volIcon(v) {
   if (v === 0) return '🔇'
@@ -9,7 +21,7 @@ function volIcon(v) {
   return '🔊'
 }
 
-export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, muteAll, nativeMuted, streamHistory, onAction }) {
+export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, muteAll, nativeMuted, streamHistory, favorites = [], onAction }) {
   const containerRef = useRef(null)
   const webviewRef = useRef(null)
   const wcIdRef = useRef(null)
@@ -22,6 +34,7 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
   const [isDragOver, setIsDragOver] = useState(false)
   const isEmpty = !dock.embedUrl
   const isYouTube = dock.platform === 'youtube'
+  const isFavorite = !isEmpty && favorites.some(f => streamKey(f) === streamKey(dock))
 
   // Keep refs in sync for use inside event handlers
   useEffect(() => { hasAudioRef.current = hasAudio }, [hasAudio])
@@ -105,6 +118,7 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
         window.electronAPI?.setWebContentsVolume(id, volumeRef.current / 100)
         // Sites without an embed player: strip the page down to its video
         if (dock.platform === 'showup') window.electronAPI?.focusVideoPlayer(id)
+        if (dock.platform === 'twitch') wv.executeJavaScript(TWITCH_GATE_JS).catch(() => {})
       } catch {}
     }
 
@@ -193,6 +207,8 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
           <AddStreamModal
             dockIndex={dockIndex}
             streamHistory={streamHistory}
+            favorites={favorites}
+            onAction={onAction}
             onAdd={(streamData) => {
               onAction('setStream', dockIndex, streamData)
               setShowAdd(false)
@@ -282,6 +298,15 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
             </button>
           </div>
 
+          {/* Favorite */}
+          <button
+            className={`dock-btn fav-btn ${isFavorite ? 'on' : ''}`}
+            onClick={() => onAction('toggleFavorite', dockIndex, dock)}
+            title={isFavorite ? 'Usuń z ulubionych' : 'Dodaj do ulubionych'}
+          >
+            {isFavorite ? '★' : '☆'}
+          </button>
+
           {/* Focus single */}
           <button
             className="dock-btn"
@@ -324,6 +349,8 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
         <AddStreamModal
           dockIndex={dockIndex}
           streamHistory={streamHistory}
+          favorites={favorites}
+          onAction={onAction}
           onAdd={(streamData) => {
             onAction('setStream', dockIndex, streamData)
             setShowAdd(false)

@@ -609,6 +609,31 @@ body.is-dragging iframe {
   white-space: nowrap;
 }
 
+.history-row {
+  display: flex;
+  align-items: stretch;
+  gap: 3px;
+}
+.history-row .history-item { flex: 1; min-width: 0; }
+.history-action {
+  flex-shrink: 0;
+  width: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--bg-3);
+  color: var(--text-3);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.1s;
+}
+.history-action:hover { background: var(--bg-4); border-color: var(--border-h); color: var(--text-1); }
+.history-action.star:hover,
+.history-action.fav { color: #facc15; }
+.history-action.fav:hover { color: var(--text-2); }
+.history-action.del:hover { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+.dock-btn.fav-btn.on { color: #facc15; }
+
 /* ── Channel search results (Add stream modal) ─────────────── */
 .search-results {
   display: flex;

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 
 export default function SettingsModal({ chatConfig, onSave, onClose }) {
-  const [room, setRoom] = useState(chatConfig.room || 'raszei')
+  const [room, setRoom] = useState(chatConfig.room || 'chatraszei')
   const [customUrl, setCustomUrl] = useState(chatConfig.customUrl || '')
   const [type, setType] = useState(chatConfig.type || 'chatango')
   const [showupMsg, setShowupMsg] = useState('')

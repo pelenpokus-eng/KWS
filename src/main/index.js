@@ -1,8 +1,10 @@
 import { app, BrowserWindow, ipcMain, dialog, protocol, webContents, webFrameMain, net } from 'electron'
 import { join } from 'path'
 import Store from 'electron-store'
-import { writeFileSync } from 'fs'
+import { writeFileSync, readFile } from 'fs'
 import { createServer } from 'http'
+import { normalize, extname, sep } from 'path'
+import appIcon from '../../resources/icon.png?asset'
 
 // Enable autoplay without user gesture
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
@@ -23,43 +25,33 @@ protocol.registerSchemesAsPrivileged([
 
 const store = new Store()
 
-// Local HTTP server serving the Chatango embed widget (same approach as raszei.eu)
-// Using localhost means the Chatango script sees a valid HTTP origin.
-let chatServerPort = 0
-const chatHtml = (() => {
-  const room = 'chatraszei'
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-html,body{width:100%;height:100%;overflow:hidden;background:#0d0d10}
-</style>
-</head>
-<body>
-<script>
-var s=document.createElement('script');
-s.async=true;
-s.setAttribute('data-cfasync','false');
-s.setAttribute('data-cid','${room}');
-s.src='https://st.chatango.com/js/gz/emb.js';
-document.body.appendChild(s);
-</script>
-</body>
-</html>`
-})()
+// Production renderer is served over http://localhost (not file://), exactly
+// like the dev server. YouTube embeds refuse to play without an HTTP Referer
+// (error 153) and Twitch embeds check parent=localhost — both fail on file://.
+const MIME = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.ico': 'image/x-icon',
+  '.woff': 'font/woff', '.woff2': 'font/woff2',
+}
 
-const chatServerReady = new Promise(resolve => {
-  const srv = createServer((_, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    res.end(chatHtml)
+function startRendererServer() {
+  const root = join(__dirname, '../renderer')
+  return new Promise(resolve => {
+    const srv = createServer((req, res) => {
+      let rel = decodeURIComponent((req.url || '/').split('?')[0])
+      if (rel === '/') rel = '/index.html'
+      const file = normalize(join(root, rel))
+      if (!file.startsWith(root + sep)) { res.writeHead(403); res.end(); return }
+      readFile(file, (err, data) => {
+        if (err) { res.writeHead(404); res.end(); return }
+        res.writeHead(200, { 'Content-Type': MIME[extname(file).toLowerCase()] || 'application/octet-stream' })
+        res.end(data)
+      })
+    })
+    srv.listen(0, '127.0.0.1', () => resolve(srv.address().port))
   })
-  srv.listen(0, '127.0.0.1', () => {
-    chatServerPort = srv.address().port
-    resolve(chatServerPort)
-  })
-})
+}
 
 function chatWrapperHtml(room) {
   const safeRoom = room.replace(/[^a-zA-Z0-9_-]/g, '')
@@ -110,6 +102,7 @@ function createWindow() {
     minHeight: 600,
     backgroundColor: '#0a0a0a',
     titleBarStyle: 'default',
+    icon: appIcon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
@@ -143,7 +136,7 @@ function createWindow() {
   if (!app.isPackaged && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    startRendererServer().then(port => mainWindow.loadURL(`http://localhost:${port}/`))
   }
 
   return mainWindow
@@ -170,7 +163,6 @@ app.whenReady().then(() => {
 
   ipcMain.handle('store:get', (_, key) => store.get(key))
   ipcMain.handle('store:set', (_, key, value) => store.set(key, value))
-  ipcMain.handle('get-chat-port', () => chatServerReady)
 
   ipcMain.handle('save-screenshot', async (_, dataUrl, label) => {
     const name = (label || 'stream').replace(/[^a-zA-Z0-9_-]/g, '_')
@@ -364,16 +356,6 @@ app.whenReady().then(() => {
         try { await frame.executeJavaScript(`(function(){var v=document.querySelectorAll('video')[0];if(v)v.volume=${vol}})()`) } catch {}
       }
     } catch {}
-  })
-
-  ipcMain.handle('get-kick-chatroom-id', async (_, channel) => {
-    try {
-      const res = await fetch(`https://kick.com/api/v2/channels/${channel}`, {
-        headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' }
-      })
-      const data = await res.json()
-      return data?.chatroom?.id ?? null
-    } catch { return null }
   })
 
   // ── Video focus for sites without an embed player (ShowUp.tv) ───────────

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { parseStreamUrl, getPlatformMeta } from '../utils/streamParser'
+import { parseStreamUrl, getPlatformMeta, streamKey } from '../utils/streamParser'
 
 // Anything with a dot, slash or colon is treated as a URL; plain words are a nickname search.
 function looksLikeUrl(val) {
@@ -14,7 +14,7 @@ function formatViewers(n) {
   return String(n)
 }
 
-export default function AddStreamModal({ dockIndex, streamHistory = [], onAdd, onClose }) {
+export default function AddStreamModal({ dockIndex, streamHistory = [], favorites = [], onAction, onAdd, onClose }) {
   const [url, setUrl] = useState('')
   const [label, setLabel] = useState('')
   const [preview, setPreview] = useState(null)
@@ -146,31 +146,66 @@ export default function AddStreamModal({ dockIndex, streamHistory = [], onAdd, o
 
   const meta = preview ? getPlatformMeta(preview.platform) : null
 
+  const favKeys = new Set(favorites.map(streamKey))
+  const historyShown = streamHistory.filter(h => !favKeys.has(streamKey(h)))
+
+  function renderQuickPick(item, isFav) {
+    const m = getPlatformMeta(item.platform)
+    return (
+      <div key={streamKey(item)} className="history-row">
+        <button
+          className="history-item"
+          onClick={() => handleHistoryPick(item)}
+          title={item.originalUrl}
+        >
+          <span className="history-dot" style={{ color: m.color }}>■</span>
+          <span className="history-platform" style={{ color: m.color }}>{m.name}</span>
+          <span className="history-label">{item.label}</span>
+        </button>
+        {isFav ? (
+          <button
+            className="history-action fav"
+            onClick={() => onAction?.('toggleFavorite', dockIndex, item)}
+            title="Usuń z ulubionych"
+          >★</button>
+        ) : (
+          <>
+            <button
+              className="history-action star"
+              onClick={() => onAction?.('toggleFavorite', dockIndex, item)}
+              title="Dodaj do ulubionych"
+            >☆</button>
+            <button
+              className="history-action del"
+              onClick={() => onAction?.('removeHistory', dockIndex, item)}
+              title="Usuń z historii"
+            >✕</button>
+          </>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
         <h2>Dock #{dockIndex + 1} — Wybierz stream</h2>
 
-        {/* Stream history quick-pick */}
-        {streamHistory.length > 0 && !isSearch && (
+        {/* Favorites + stream history quick-pick */}
+        {!isSearch && favorites.length > 0 && (
+          <div style={{ marginBottom: 14 }}>
+            <div className="modal-label">★ Ulubione</div>
+            <div className="history-list">
+              {favorites.map(item => renderQuickPick(item, true))}
+            </div>
+          </div>
+        )}
+
+        {!isSearch && historyShown.length > 0 && (
           <div style={{ marginBottom: 18 }}>
             <div className="modal-label">Ostatnie streamy</div>
             <div className="history-list">
-              {streamHistory.map((item, i) => {
-                const m = getPlatformMeta(item.platform)
-                return (
-                  <button
-                    key={i}
-                    className="history-item"
-                    onClick={() => handleHistoryPick(item)}
-                    title={item.originalUrl}
-                  >
-                    <span className="history-dot" style={{ color: m.color }}>■</span>
-                    <span className="history-platform" style={{ color: m.color }}>{m.name}</span>
-                    <span className="history-label">{item.label}</span>
-                  </button>
-                )
-              })}
+              {historyShown.map(item => renderQuickPick(item, false))}
             </div>
           </div>
         )}

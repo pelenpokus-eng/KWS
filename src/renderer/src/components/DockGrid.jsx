@@ -1,6 +1,6 @@
 import StreamDock from './StreamDock'
 
-export default function DockGrid({ docks, layout, activeAudioDock, multiAudio, enabledDocks, muteAll, nativeMuted, streamHistory, onDockAction }) {
+export default function DockGrid({ docks, layout, activeAudioDock, multiAudio, enabledDocks, muteAll, nativeMuted, streamHistory, favorites, onDockAction }) {
   const dockProps = (dock, i) => ({
     dock,
     dockIndex: i,
@@ -9,6 +9,7 @@ export default function DockGrid({ docks, layout, activeAudioDock, multiAudio, e
     muteAll,
     nativeMuted: nativeMuted?.[i] ?? false,
     streamHistory,
+    favorites,
     onAction: onDockAction,
   })
 
