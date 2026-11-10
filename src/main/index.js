@@ -278,28 +278,37 @@ app.whenReady().then(() => {
       var proto = HTMLMediaElement.prototype;
       var vd = Object.getOwnPropertyDescriptor(proto, 'volume');
       var md = Object.getOwnPropertyDescriptor(proto, 'muted');
-      // Muted: shadow the setters so YouTube's own JS can't turn sound back on
-      function lock(v) {
-        if (v.__kwsLocked) return;
-        Object.defineProperty(v, 'volume', { get: function(){ return 0; }, set: function(){ try { vd.set.call(v, 0); } catch(e){} }, configurable: true });
-        Object.defineProperty(v, 'muted', { get: function(){ return true; }, set: function(){ try { md.set.call(v, true); } catch(e){} }, configurable: true });
-        v.__kwsLocked = true;
+      // Take over the element's volume/muted setters: whatever YouTube's own
+      // JS writes (it restores its saved volume, often 100%, a few seconds
+      // after start) resolves to the dock's wanted state instead — so no loud
+      // blip and the slider stays true. Getters report the real values.
+      function own(v) {
+        if (v.__kwsOwned) return;
+        Object.defineProperty(v, 'volume', {
+          get: function(){ return vd.get.call(v); },
+          set: function(){ var s = window.__kwsYt; try { vd.set.call(v, s.muted ? 0 : s.vol); } catch(e){} },
+          configurable: true
+        });
+        Object.defineProperty(v, 'muted', {
+          get: function(){ return md.get.call(v); },
+          set: function(){ try { md.set.call(v, !!window.__kwsYt.muted); } catch(e){} },
+          configurable: true
+        });
+        v.__kwsOwned = true;
       }
+      // Also re-applied every tick for new/replaced <video> elements
       function apply() {
         var s = window.__kwsYt;
+        var want = s.muted ? 0 : s.vol;
         document.querySelectorAll('video').forEach(function(v){
-          if (s.muted) {
-            lock(v);
-            try { vd.set.call(v, 0); md.set.call(v, true); } catch(e){}
-          } else if (v.__kwsLocked || !v.__kwsSeen || s.dirty) {
-            if (v.__kwsLocked) { delete v.volume; delete v.muted; v.__kwsLocked = false; }
-            try { vd.set.call(v, s.vol); md.set.call(v, false); } catch(e){}
-          }
-          v.__kwsSeen = true;
+          own(v);
+          try {
+            if (Math.abs(vd.get.call(v) - want) > 0.005) vd.set.call(v, want);
+            if (md.get.call(v) !== !!s.muted) md.set.call(v, !!s.muted);
+          } catch(e){}
         });
-        s.dirty = false;
       }
-      window.__kwsYt = { muted: m, vol: vol, dirty: true };
+      window.__kwsYt = { muted: m, vol: vol };
       apply();
       if (!window.__kwsYtTimer) window.__kwsYtTimer = setInterval(apply, 500);
       return 1;

@@ -8,6 +8,8 @@ export default function Toolbar({
   onToggleMuteAll,
   onToggleAlwaysOnTop,
   onOpenSettings,
+  dualChat,
+  onDualChatChange,
 }) {
   return (
     <div className="toolbar">
@@ -60,6 +62,26 @@ export default function Toolbar({
         >
           🔇 Wycisz wszystko
         </button>
+      </div>
+
+      <div className="toolbar-group" title="Panel czatu: jeden czat albo dwa obok siebie">
+        <span className="toolbar-group-label">Czat</span>
+        <div className="layout-toggle">
+          <button
+            className={`btn ${!dualChat ? 'active' : ''}`}
+            onClick={() => dualChat && onDualChatChange(false)}
+            title="Jeden czat"
+          >
+            ▭ 1 czat
+          </button>
+          <button
+            className={`btn ${dualChat ? 'active' : ''}`}
+            onClick={() => !dualChat && onDualChatChange(true)}
+            title="Dwa czaty — w każdym wybierasz źródło osobno"
+          >
+            ⊟ 2 czaty
+          </button>
+        </div>
       </div>
 
       <span className="toolbar-spacer" />

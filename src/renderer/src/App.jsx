@@ -38,6 +38,9 @@ const DEFAULT_STATE = {
   multiAudio: false,
   streamHistory: [],
   favorites: [],
+  dualChat: false,
+  chatConfig2: null,
+  chatSplit: 0.5,
 }
 
 export default function App() {
@@ -48,6 +51,9 @@ export default function App() {
   const [streamHistory, setStreamHistory] = useState(DEFAULT_STATE.streamHistory)
   const [favorites, setFavorites] = useState(DEFAULT_STATE.favorites)
   const [multiAudio, setMultiAudio] = useState(DEFAULT_STATE.multiAudio)
+  const [dualChat, setDualChat] = useState(DEFAULT_STATE.dualChat)
+  const [chatConfig2, setChatConfig2] = useState(DEFAULT_STATE.chatConfig2)
+  const [chatSplit, setChatSplit] = useState(DEFAULT_STATE.chatSplit)
   const [muteAll, setMuteAll] = useState(false)
   const [enabledDocks, setEnabledDocks] = useState(() => new Set([0]))
   const [nativeMuted, setNativeMuted] = useState({})
@@ -71,6 +77,9 @@ export default function App() {
         if (Array.isArray(state.favorites)) setFavorites(state.favorites)
         if (typeof state.multiAudio === 'boolean') setMultiAudio(state.multiAudio)
         if (typeof state.muteAll === 'boolean') setMuteAll(state.muteAll)
+        if (typeof state.dualChat === 'boolean') setDualChat(state.dualChat)
+        if (state.chatConfig2 && typeof state.chatConfig2 === 'object') setChatConfig2(state.chatConfig2)
+        if (typeof state.chatSplit === 'number') setChatSplit(Math.max(0.2, Math.min(0.8, state.chatSplit)))
       }
       setLoaded(true)
     }).catch(() => setLoaded(true))
@@ -96,10 +105,13 @@ export default function App() {
         muteAll,
         streamHistory,
         favorites,
+        dualChat,
+        chatConfig2,
+        chatSplit,
       })
     }, 300)
     return () => clearTimeout(t)
-  }, [docks, layout, chatConfig, activeAudioDock, multiAudio, muteAll, streamHistory, favorites, loaded])
+  }, [docks, layout, chatConfig, activeAudioDock, multiAudio, muteAll, streamHistory, favorites, dualChat, chatConfig2, chatSplit, loaded])
 
   // Always on top
   useEffect(() => {
@@ -273,6 +285,9 @@ export default function App() {
         onToggleMuteAll={() => setMuteAll(p => !p)}
         onToggleAlwaysOnTop={() => setAlwaysOnTop(p => !p)}
         onOpenSettings={() => setShowSettings(true)}
+        dualChat={dualChat}
+        // 2nd pane starts empty (chooser) - nothing opens automatically
+        onDualChatChange={setDualChat}
       />
 
       <div className="app-body">
@@ -290,8 +305,13 @@ export default function App() {
         />
         <ChatPanel
           chatConfig={chatConfig}
+          chatConfig2={chatConfig2}
+          dualChat={dualChat}
+          splitRatio={chatSplit}
           docks={docks}
           onChatConfigChange={setChatConfig}
+          onChatConfig2Change={setChatConfig2}
+          onSplitRatioChange={setChatSplit}
         />
       </div>
 
