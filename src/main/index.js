@@ -263,81 +263,88 @@ app.whenReady().then(() => {
     }
   })
 
-  // Per-videoId cancellation tokens so a newer command kills the old injection loop
-  const ytAudioAborts = new Map()
+  // ── YouTube audio ───────────────────────────────────────────────────────
+  // YouTube docks are plain iframes in the main window (webview embeds get
+  // error 153), so they can't use setAudioMuted. Instead a small controller
+  // lives inside the embed frame and enforces the wanted state on EVERY
+  // <video> every 500 ms — the player creates/replaces its video element late
+  // and asynchronously, so one-shot injection used to miss it and the dock
+  // played sound while showing the mute icon. The wanted state is kept here
+  // and re-sent whenever a YouTube frame (re)loads, e.g. after a dock swap.
+  const ytAudioState = new Map() // videoId -> { muted, vol }
 
-  // YouTube iframe audio — targets by video ID in the frame URL path.
-  // Uses defineProperty to LOCK the video element's volume/muted setters so
-  // YouTube's player-init cannot reset them after our injection.
-  ipcMain.handle('set-youtube-audio', async (_, videoId, muted, volume) => {
-    const m = !!muted
-    const vol = Math.max(0, Math.min(1, Number(volume)))
-    const targetPath = `/embed/${videoId}`
-
-    const prev = ytAudioAborts.get(videoId)
-    if (prev) prev.cancelled = true
-    const token = { cancelled: false }
-    ytAudioAborts.set(videoId, token)
-
-    // Lock: intercept the prototype setters so any future v.volume = X or v.muted = X
-    // from YouTube's own JS always resolves to silent/muted.
-    const lockScript = `(function(){
-      var v = document.querySelectorAll('video')[0];
-      if (!v) return 0;
-      if (v.__kwsLocked) return 1;
+  function ytControllerScript({ muted, vol }) {
+    return `(function(m, vol){
       var proto = HTMLMediaElement.prototype;
       var vd = Object.getOwnPropertyDescriptor(proto, 'volume');
       var md = Object.getOwnPropertyDescriptor(proto, 'muted');
-      Object.defineProperty(v, 'volume', {
-        get: function(){ return 0; },
-        set: function(){ try{ vd.set.call(v, 0); }catch(e){} },
-        configurable: true, enumerable: true
-      });
-      Object.defineProperty(v, 'muted', {
-        get: function(){ return true; },
-        set: function(){ try{ md.set.call(v, true); }catch(e){} },
-        configurable: true, enumerable: true
-      });
-      try{ vd.set.call(v, 0); md.set.call(v, true); }catch(e){}
-      v.__kwsLocked = true;
-      return 1;
-    })()`
-
-    const unlockScript = `(function(){
-      var v = document.querySelectorAll('video')[0];
-      if (!v) return 0;
-      var proto = HTMLMediaElement.prototype;
-      var vd = Object.getOwnPropertyDescriptor(proto, 'volume');
-      var md = Object.getOwnPropertyDescriptor(proto, 'muted');
-      delete v.volume; delete v.muted;
-      v.__kwsLocked = false;
-      try{ vd.set.call(v, ${vol}); md.set.call(v, false); }catch(e){}
-      return 1;
-    })()`
-
-    const script = m ? lockScript : unlockScript
-
-    async function tryInject() {
-      for (const frame of mainWindow.webContents.mainFrame.framesInSubtree) {
-        if (!frame.url) continue
-        try {
-          const fUrl = new URL(frame.url)
-          if (!fUrl.hostname.endsWith('youtube-nocookie.com') && !fUrl.hostname.endsWith('youtube.com')) continue
-          if (!fUrl.pathname.startsWith(targetPath)) continue
-          const result = await frame.executeJavaScript(script)
-          if (result > 0) return true
-        } catch {}
+      // Muted: shadow the setters so YouTube's own JS can't turn sound back on
+      function lock(v) {
+        if (v.__kwsLocked) return;
+        Object.defineProperty(v, 'volume', { get: function(){ return 0; }, set: function(){ try { vd.set.call(v, 0); } catch(e){} }, configurable: true });
+        Object.defineProperty(v, 'muted', { get: function(){ return true; }, set: function(){ try { md.set.call(v, true); } catch(e){} }, configurable: true });
+        v.__kwsLocked = true;
       }
-      return false
-    }
+      function apply() {
+        var s = window.__kwsYt;
+        document.querySelectorAll('video').forEach(function(v){
+          if (s.muted) {
+            lock(v);
+            try { vd.set.call(v, 0); md.set.call(v, true); } catch(e){}
+          } else if (v.__kwsLocked || !v.__kwsSeen || s.dirty) {
+            if (v.__kwsLocked) { delete v.volume; delete v.muted; v.__kwsLocked = false; }
+            try { vd.set.call(v, s.vol); md.set.call(v, false); } catch(e){}
+          }
+          v.__kwsSeen = true;
+        });
+        s.dirty = false;
+      }
+      window.__kwsYt = { muted: m, vol: vol, dirty: true };
+      apply();
+      if (!window.__kwsYtTimer) window.__kwsYtTimer = setInterval(apply, 500);
+      return 1;
+    })(${!!muted}, ${vol})`
+  }
 
-    // Retry until the video element exists (player init is async)
-    for (let i = 0; i < 30; i++) {
-      if (token.cancelled) return
-      if (await tryInject()) { ytAudioAborts.delete(videoId); return }
-      await new Promise(r => setTimeout(r, 300))
+  function ytVideoIdOf(frameUrl) {
+    try {
+      const u = new URL(frameUrl)
+      if (!/(^|\.)youtube(-nocookie)?\.com$/.test(u.hostname)) return null
+      const m = u.pathname.match(/^\/embed\/([^/?#]+)/)
+      return m ? m[1] : null
+    } catch { return null }
+  }
+
+  async function pushYtState(videoId) {
+    const state = ytAudioState.get(videoId)
+    if (!state) return false
+    let hit = false
+    for (const frame of mainWindow.webContents.mainFrame.framesInSubtree) {
+      if (ytVideoIdOf(frame.url) !== videoId) continue
+      try { await frame.executeJavaScript(ytControllerScript(state)); hit = true } catch {}
     }
-    ytAudioAborts.delete(videoId)
+    return hit
+  }
+
+  // Any YouTube frame that (re)loads gets its wanted state again
+  mainWindow.webContents.on('did-frame-finish-load', (_, _isMain, pid, routingId) => {
+    try {
+      const frame = webFrameMain.fromId(pid, routingId)
+      const id = frame && ytVideoIdOf(frame.url)
+      if (id && ytAudioState.has(id)) frame.executeJavaScript(ytControllerScript(ytAudioState.get(id))).catch(() => {})
+    } catch {}
+  })
+
+  ipcMain.handle('set-youtube-audio', async (_, videoId, muted, volume) => {
+    const id = String(videoId || '')
+    if (!id) return
+    ytAudioState.set(id, { muted: !!muted, vol: Math.max(0, Math.min(1, Number(volume) || 0)) })
+    // The iframe may not exist yet (dock just mounted) — the load hook above
+    // covers that, this loop covers a frame that's mid-load right now.
+    for (let i = 0; i < 20; i++) {
+      if (await pushYtState(id)) return
+      await new Promise(r => setTimeout(r, 500))
+    }
   })
 
   ipcMain.handle('set-webcontents-muted', (_, id, muted) => {
@@ -352,8 +359,21 @@ app.whenReady().then(() => {
       const wc = webContents.fromId(Number(id))
       if (!wc || wc.isDestroyed()) return
       const vol = Math.max(0, Math.min(1, Number(volume)))
+      // Players create their <video> late and restore their own saved volume
+      // (Kick 0.6, Twitch 0.5), so a one-shot set got lost. Keep a tiny
+      // enforcer in the page that holds every <video> at the dock's volume.
+      const script = `(function(vol){
+        window.__kwsVol = vol;
+        function apply(){
+          document.querySelectorAll('video').forEach(function(v){
+            if (Math.abs(v.volume - window.__kwsVol) > 0.005) { try { v.volume = window.__kwsVol; } catch(e){} }
+          });
+        }
+        apply();
+        if (!window.__kwsVolTimer) window.__kwsVolTimer = setInterval(apply, 500);
+      })(${vol})`
       for (const frame of wc.mainFrame.framesInSubtree) {
-        try { await frame.executeJavaScript(`(function(){var v=document.querySelectorAll('video')[0];if(v)v.volume=${vol}})()`) } catch {}
+        try { await frame.executeJavaScript(script) } catch {}
       }
     } catch {}
   })

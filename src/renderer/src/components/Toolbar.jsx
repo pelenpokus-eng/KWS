@@ -14,49 +14,53 @@ export default function Toolbar({
       <span className="toolbar-logo">⚡ KWS</span>
       <span className="toolbar-sep" />
 
-      <div className="layout-toggle">
-        <button
-          className={`btn ${layout === 'single' ? 'active' : ''}`}
-          onClick={() => onLayoutChange('single')}
-          title="Jeden stream"
-        >
-          ▣ Jeden
-        </button>
-        <button
-          className={`btn ${layout === 'quad' ? 'active' : ''}`}
-          onClick={() => onLayoutChange('quad')}
-          title="Cztery streamy (2×2)"
-        >
-          ⊞ Cztery
-        </button>
+      <div className="toolbar-group" title="Układ docków ze streamami">
+        <span className="toolbar-group-label">Docki</span>
+        <div className="layout-toggle">
+          <button
+            className={`btn ${layout === 'single' ? 'active' : ''}`}
+            onClick={() => onLayoutChange('single')}
+            title="Jeden stream"
+          >
+            ▣ Jeden
+          </button>
+          <button
+            className={`btn ${layout === 'quad' ? 'active' : ''}`}
+            onClick={() => onLayoutChange('quad')}
+            title="Cztery streamy (2×2)"
+          >
+            ⊞ Cztery
+          </button>
+        </div>
       </div>
 
-      <span className="toolbar-sep" />
+      <div className="toolbar-group" title="Sterowanie dźwiękiem streamów">
+        <span className="toolbar-group-label">Dźwięk</span>
+        <div className="layout-toggle">
+          <button
+            className={`btn ${!multiAudio ? 'active' : ''}`}
+            onClick={() => multiAudio && onToggleMultiAudio()}
+            title="Solo — dźwięk tylko z aktywnego streama"
+          >
+            Solo
+          </button>
+          <button
+            className={`btn ${multiAudio ? 'active' : ''}`}
+            onClick={() => !multiAudio && onToggleMultiAudio()}
+            title="Multi — dźwięk ze wszystkich streamów"
+          >
+            Multi
+          </button>
+        </div>
 
-      <div className="layout-toggle">
         <button
-          className={`btn ${!multiAudio ? 'active' : ''}`}
-          onClick={() => multiAudio && onToggleMultiAudio()}
-          title="Solo — dźwięk tylko z aktywnego streama"
+          className={`btn ${muteAll ? 'active' : ''}`}
+          onClick={onToggleMuteAll}
+          title={muteAll ? 'Przywróć dźwięk' : 'Wycisz wszystkie streamy'}
         >
-          🔊 Solo
-        </button>
-        <button
-          className={`btn ${multiAudio ? 'active' : ''}`}
-          onClick={() => !multiAudio && onToggleMultiAudio()}
-          title="Multi — dźwięk ze wszystkich streamów"
-        >
-          🔊 Multi
+          🔇 Wycisz wszystko
         </button>
       </div>
-
-      <button
-        className={`btn ${muteAll ? 'active' : ''}`}
-        onClick={onToggleMuteAll}
-        title={muteAll ? 'Przywróć dźwięk' : 'Wycisz wszystkie streamy'}
-      >
-        🔇 Mute
-      </button>
 
       <span className="toolbar-spacer" />
 

@@ -77,6 +77,27 @@ body {
 
 .toolbar-spacer { flex: 1; }
 
+/* Labelled control groups (Docki / Dźwięk) */
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 4px 0 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-0);
+}
+.toolbar-group-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  margin-right: 2px;
+  user-select: none;
+}
+
 .btn {
   display: inline-flex;
   align-items: center;

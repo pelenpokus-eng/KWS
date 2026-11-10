@@ -26,10 +26,14 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
   const webviewRef = useRef(null)
   const wcIdRef = useRef(null)
   const hasAudioRef = useRef(hasAudio)
-  const volumeRef = useRef(100)
+  const muteAllRef = useRef(muteAll)
+  const volumeRef = useRef(dock.volume ?? 100)
   const containerSizeRef = useRef({ w: 0, h: 0 })
   const [showAdd, setShowAdd] = useState(false)
-  const [volume, setVolume] = useState(100)
+  // Volume lives in the dock itself (persisted, follows the stream on swap,
+  // survives layout switches and restarts)
+  const volume = dock.volume ?? 100
+  const setVolume = (v) => onAction('setVolume', dockIndex, typeof v === 'function' ? v(volume) : v)
   const [liveSrc, setLiveSrc] = useState('')
   const [isDragOver, setIsDragOver] = useState(false)
   const isEmpty = !dock.embedUrl
@@ -38,6 +42,7 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
 
   // Keep refs in sync for use inside event handlers
   useEffect(() => { hasAudioRef.current = hasAudio }, [hasAudio])
+  useEffect(() => { muteAllRef.current = muteAll }, [muteAll])
   useEffect(() => { volumeRef.current = volume }, [volume])
 
 
@@ -114,7 +119,10 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
         const id = wv.getWebContentsId()
         wcIdRef.current = id
         applySize(id)
-        window.electronAPI?.setWebContentsMuted(id, !hasAudioRef.current)
+        // Runs after every (re)load — manual ↺, crash auto-reload, navigation —
+        // so a muted dock must come back muted: global Mute, not the active
+        // dock, or its own volume at 0 (the dock's mute icon)
+        window.electronAPI?.setWebContentsMuted(id, muteAllRef.current || !hasAudioRef.current || volumeRef.current === 0)
         window.electronAPI?.setWebContentsVolume(id, volumeRef.current / 100)
         // Sites without an embed player: strip the page down to its video
         if (dock.platform === 'showup') window.electronAPI?.focusVideoPlayer(id)
@@ -173,7 +181,9 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
     } else {
       const id = wcIdRef.current
       if (!id) return
-      window.electronAPI?.setWebContentsMuted(id, effectiveMuted)
+      // Volume 0 also mutes the whole guest — silent even before the player's
+      // <video> exists, and regardless of what the player does with volume
+      window.electronAPI?.setWebContentsMuted(id, effectiveMuted || volume === 0)
     }
   }, [hasAudio, muteAll, liveSrc, isYouTube, dock.id, volume])
 

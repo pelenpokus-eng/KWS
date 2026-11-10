@@ -70,6 +70,7 @@ export default function App() {
         if (Array.isArray(state.streamHistory)) setStreamHistory(state.streamHistory)
         if (Array.isArray(state.favorites)) setFavorites(state.favorites)
         if (typeof state.multiAudio === 'boolean') setMultiAudio(state.multiAudio)
+        if (typeof state.muteAll === 'boolean') setMuteAll(state.muteAll)
       }
       setLoaded(true)
     }).catch(() => setLoaded(true))
@@ -82,19 +83,23 @@ export default function App() {
     })
   }, [])
 
-  // Persist state on change
+  // Persist state on change (debounced — volume sliders fire on every step)
   useEffect(() => {
     if (!loaded || !window.electronAPI) return
-    window.electronAPI.store.set('app-state', {
-      docks,
-      layout,
-      chatConfig,
-      activeAudioDock,
-      multiAudio,
-      streamHistory,
-      favorites,
-    })
-  }, [docks, layout, chatConfig, activeAudioDock, multiAudio, streamHistory, favorites, loaded])
+    const t = setTimeout(() => {
+      window.electronAPI.store.set('app-state', {
+        docks,
+        layout,
+        chatConfig,
+        activeAudioDock,
+        multiAudio,
+        muteAll,
+        streamHistory,
+        favorites,
+      })
+    }, 300)
+    return () => clearTimeout(t)
+  }, [docks, layout, chatConfig, activeAudioDock, multiAudio, muteAll, streamHistory, favorites, loaded])
 
   // Always on top
   useEffect(() => {
@@ -148,6 +153,17 @@ export default function App() {
         addToHistory(payload)
         setActiveAudioDock(prev => prev === null ? dockIndex : prev)
         break
+
+      case 'setVolume': {
+        const vol = Math.max(0, Math.min(100, Math.round(Number(payload))))
+        setDocks(prev => {
+          if (!prev[dockIndex]?.embedUrl || prev[dockIndex].volume === vol) return prev
+          const next = [...prev]
+          next[dockIndex] = { ...next[dockIndex], volume: vol }
+          return next
+        })
+        break
+      }
 
       case 'removeHistory': {
         const key = streamKey(payload)
