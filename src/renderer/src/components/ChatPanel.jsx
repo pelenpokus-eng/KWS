@@ -12,22 +12,67 @@ function chatangoUrl(room) {
 
 // Chat page in a webview that reloads itself if its renderer crashes
 // (same backoff as stream docks: 1 s, 2 s, ...; gives up after 5 crashes/min).
-// darkTheme: inject the Chatango dark theme after each load.
-function ChatWebview({ src, darkTheme = false }) {
+// chatango: chat iframe only, no page header, app background; links/images/
+// videos are handed to the app instead of opening Electron windows
+// ('chatango-compact' in main).
+// fontPct: text size from Settings, applied live — Chatango: message list
+// ('chatango-compact'); other chats (Kick): root rem size ('set-chat-font').
+function ChatWebview({ src, chatango = false, fontPct = 100 }) {
+  const compact = chatango
   const ref = useRef(null)
   const [nonce, setNonce] = useState(0)
+  // a dark cover hides the page until the chat is pinned, styled and has its
+  // history drawn — no white flash of the raw Chatango page
+  const [shown, setShown] = useState(!compact)
+  const [ready, setReady] = useState(false)
+  const fontRef = useRef(fontPct)
+  fontRef.current = fontPct
+
+  // Font size changed in Settings: restyle the loaded chat, no reload
+  useEffect(() => {
+    try {
+      const id = ref.current.getWebContentsId()
+      if (compact && shown) window.electronAPI?.chatangoCompact(id, fontPct)
+      if (!compact && ready) window.electronAPI?.setChatFont(id, fontPct)
+    } catch {}
+  }, [fontPct, compact, shown, ready])
 
   useEffect(() => {
     const el = ref.current
     if (!el) return
     const timers = []
+    let cancelled = false
+    setReady(false)
     const onReady = () => {
-      if (!darkTheme) return
+      if (!compact) {
+        // main re-applies the size on every later load of this webview
+        try { window.electronAPI?.setChatFont(el.getWebContentsId(), fontRef.current) } catch {}
+        setReady(true)
+        return
+      }
       const run = () => {
-        try { window.electronAPI?.injectChatangoDark(el.getWebContentsId()) } catch {}
+        try { window.electronAPI?.chatangoCompact(el.getWebContentsId(), fontRef.current) } catch {}
       }
       run()
       for (const ms of [1200, 3000, 6000, 10000]) timers.push(setTimeout(run, ms))
+      if (compact) {
+        // dom-ready also fires after a reload — cover again, poll until ready
+        setShown(false)
+        const started = Date.now()
+        const poll = async () => {
+          if (cancelled) return
+          let r = null
+          try { r = await window.electronAPI?.chatangoCompact(el.getWebContentsId(), fontRef.current) } catch {}
+          if (cancelled) return
+          // safety net: show whatever is there after 10 s (e.g. empty room)
+          if ((r?.pinned && r?.styled && r?.msgs > 0) || Date.now() - started > 10000) {
+            timers.push(setTimeout(() => { if (!cancelled) setShown(true) }, 150))
+          } else {
+            timers.push(setTimeout(poll, 300))
+          }
+        }
+        poll()
+      }
     }
     let crashes = []
     const onGone = (e) => {
@@ -44,20 +89,24 @@ function ChatWebview({ src, darkTheme = false }) {
     el.addEventListener('dom-ready', onReady)
     el.addEventListener('render-process-gone', onGone)
     return () => {
+      cancelled = true
       timers.forEach(clearTimeout)
       el.removeEventListener('dom-ready', onReady)
       el.removeEventListener('render-process-gone', onGone)
     }
-  }, [src, darkTheme, nonce])
+  }, [src, compact, nonce])
 
   return (
-    <webview
-      key={`${src}#${nonce}`}
-      ref={ref}
-      src={src}
-      allowpopups="true"
-      style={{ position: 'absolute', inset: 0, border: 'none' }}
-    />
+    <>
+      <webview
+        key={`${src}#${nonce}`}
+        ref={ref}
+        src={src}
+        allowpopups="true"
+        style={{ position: 'absolute', inset: 0, border: 'none' }}
+      />
+      {!shown && <div className="chat-loading-cover">Ładowanie czatu…</div>}
+    </>
   )
 }
 
@@ -209,7 +258,7 @@ function ChatPane({ index, config, settings, sources, showBar, onChange, onClear
         ) : config.type === 'kick' && stream ? (
           // Kick's own popout chat — its realtime config changes server-side,
           // so a hand-rolled Pusher client keeps breaking
-          <ChatWebview key={`kick-${config.channel}`} src={`https://kick.com/popout/${encodeURIComponent(config.channel)}/chat`} />
+          <ChatWebview key={`kick-${config.channel}`} src={`https://kick.com/popout/${encodeURIComponent(config.channel)}/chat`} fontPct={settings.kickFontPct || 100} />
         ) : config.type === 'twitch' && stream ? (
           <iframe
             key={config.channel}
@@ -218,7 +267,7 @@ function ChatPane({ index, config, settings, sources, showBar, onChange, onClear
             style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none' }}
           />
         ) : (
-          <ChatWebview key={embedUrl} src={embedUrl} darkTheme={base !== 'custom'} />
+          <ChatWebview key={embedUrl} src={embedUrl} chatango={base !== 'custom'} fontPct={base !== 'custom' ? (settings.fontPct || 100) : 100} />
         )}
       </div>
     </div>
@@ -257,6 +306,11 @@ export default function ChatPanel({
   const widthAtStart = useRef(width)
   const ratioAtStart = useRef(splitRatio)
   const streamSources = getChatSources(docks)
+
+  // Twitch chat is an iframe in this window — main applies the size to it
+  // now and whenever a Twitch chat frame loads
+  const twitchFontPct = chatConfig?.twitchFontPct || 100
+  useEffect(() => { window.electronAPI?.setTwitchChatFont(twitchFontPct) }, [twitchFontPct])
 
   const [resizing, startResize] = useDrag(useCallback((dx) => {
     const w = widthAtStart.current - dx

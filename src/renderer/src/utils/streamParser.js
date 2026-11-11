@@ -32,7 +32,7 @@ export function parseStreamUrl(rawUrl) {
     }
 
     // YouTube
-    if (host === 'youtube.com' || host === 'youtu.be') {
+    if (host === 'youtube.com' || host === 'm.youtube.com' || host === 'youtu.be') {
       let videoId = null
       if (host === 'youtu.be') {
         videoId = parsed.pathname.slice(1).split('/')[0]
@@ -42,6 +42,8 @@ export function parseStreamUrl(rawUrl) {
         videoId = parsed.pathname.replace('/live/', '').split('/')[0]
       } else if (parsed.pathname.startsWith('/embed/')) {
         videoId = parsed.pathname.replace('/embed/', '').split('/')[0]
+      } else if (parsed.pathname.startsWith('/shorts/')) {
+        videoId = parsed.pathname.replace('/shorts/', '').split('/')[0]
       }
       if (videoId) {
         return {
@@ -66,6 +68,22 @@ export function parseStreamUrl(rawUrl) {
           label: `Kick: ${channel}`,
           originalUrl: url,
           embedUrl: `https://player.kick.com/${channel}`,
+        }
+      }
+    }
+
+    // Streamable clip: streamable.com/<id> (or /e/<id>) -> its embed player
+    if (host === 'streamable.com') {
+      const parts = parsed.pathname.split('/').filter(Boolean)
+      const id = parts[0] === 'e' || parts[0] === 'o' ? parts[1] : parts[0]
+      if (id && /^[a-z0-9]+$/i.test(id)) {
+        return {
+          platform: 'streamable',
+          type: 'video',
+          id,
+          label: `Streamable: ${id}`,
+          originalUrl: url,
+          embedUrl: `https://streamable.com/e/${id}?autoplay=1`,
         }
       }
     }
@@ -105,6 +123,7 @@ export const PLATFORM_META = {
   youtube: { color: '#ff0000', emoji: '●', name: 'YouTube' },
   kick:    { color: '#53fc18', emoji: '●', name: 'Kick' },
   showup:  { color: '#ff3d7f', emoji: '●', name: 'ShowUp' },
+  streamable: { color: '#0f90fa', emoji: '●', name: 'Streamable' },
   custom:  { color: '#6366f1', emoji: '●', name: 'Custom' },
 }
 

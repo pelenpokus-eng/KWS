@@ -1,13 +1,35 @@
 import { useState } from 'react'
 
+const FONT_STEPS = [100, 125, 150, 175, 200]
+
+function FontPicker({ value, onChange }) {
+  return (
+    <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+      {FONT_STEPS.map(p => (
+        <button
+          key={p}
+          className={`btn ${value === p ? 'active' : ''}`}
+          onClick={() => onChange(p)}
+          title={p === 100 ? 'Standardowa wielkość' : `${p / 100}× większa`}
+        >
+          {p === 100 ? 'Normalna' : `${p}%`}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 export default function SettingsModal({ chatConfig, onSave, onClose }) {
   const [room, setRoom] = useState(chatConfig.room || 'chatraszei')
   const [customUrl, setCustomUrl] = useState(chatConfig.customUrl || '')
-  const [type, setType] = useState(chatConfig.type || 'chatango')
+  const [type, setType] = useState(['chatango', 'custom'].includes(chatConfig.type) ? chatConfig.type : (chatConfig.baseType || 'chatango'))
   const [showupMsg, setShowupMsg] = useState('')
+  const [fontPct, setFontPct] = useState(chatConfig.fontPct || 100)
+  const [kickFontPct, setKickFontPct] = useState(chatConfig.kickFontPct || 100)
+  const [twitchFontPct, setTwitchFontPct] = useState(chatConfig.twitchFontPct || 100)
 
   function handleSave() {
-    onSave({ type, room: room.trim(), customUrl: customUrl.trim() })
+    onSave({ type, room: room.trim(), customUrl: customUrl.trim(), fontPct, kickFontPct, twitchFontPct })
   }
 
   function handleKey(e) {
@@ -55,8 +77,22 @@ export default function SettingsModal({ chatConfig, onSave, onClose }) {
                 <span style={{ fontSize: 11, color: 'var(--text-2)' }}>{chatangoUrl}</span>
               </div>
             )}
+
+            <div className="settings-section">Chatango</div>
+            <div className="modal-label">Wielkość czcionki wiadomości</div>
+            <FontPicker value={fontPct} onChange={setFontPct} />
           </>
         )}
+
+        <div className="settings-section">Czat Kick</div>
+        <div className="modal-label">Wielkość czcionki</div>
+        <FontPicker value={kickFontPct} onChange={setKickFontPct} />
+
+        <div className="settings-section">Czat Twitch</div>
+        <div className="modal-label">Wielkość czcionki</div>
+        <FontPicker value={twitchFontPct} onChange={setTwitchFontPct} />
+
+        <div className="settings-section" />
 
         {type === 'custom' && (
           <>

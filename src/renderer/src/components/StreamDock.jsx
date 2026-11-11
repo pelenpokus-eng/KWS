@@ -14,6 +14,19 @@ const TWITCH_GATE_JS = `(function(){
   }, 1000);
 })()`
 
+// YouTube embeds always start muted (mute=1). The audio controller injected
+// by main only runs once the frame has loaded, and until then the player
+// would play at its own saved volume — after every (re)load (adding a stream,
+// Jeden↔Cztery, ↺, swap) a dock that should be silent could start playing.
+// Now it's silent until the controller unmutes the dock that has audio.
+function ytMutedSrc(src) {
+  try {
+    const u = new URL(src)
+    u.searchParams.set('mute', '1')
+    return u.toString()
+  } catch { return src }
+}
+
 function volIcon(v) {
   if (v === 0) return '🔇'
   if (v < 34) return '🔈'
@@ -21,7 +34,7 @@ function volIcon(v) {
   return '🔊'
 }
 
-export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, muteAll, nativeMuted, streamHistory, favorites = [], onAction }) {
+export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, muteAll, nativeMuted, streamHistory, favorites = [], onAction, single = false }) {
   const containerRef = useRef(null)
   const webviewRef = useRef(null)
   const wcIdRef = useRef(null)
@@ -243,7 +256,7 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
       {liveSrc && isYouTube && (
         <iframe
           key={liveSrc}
-          src={liveSrc}
+          src={ytMutedSrc(liveSrc)}
           allowFullScreen
           allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
           style={{ position: 'absolute', inset: 0, border: 'none', width: '100%', height: '100%', pointerEvents: 'none' }}
@@ -318,12 +331,13 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
           </button>
 
           {/* Focus single */}
+          {/* Grid: show only this stream · single view: back to the 2×2 grid */}
           <button
             className="dock-btn"
-            onClick={() => onAction('focusSingle', dockIndex)}
-            title="Pokaż tylko ten stream (solo widok + dźwięk)"
+            onClick={() => onAction(single ? 'showQuad' : 'focusSingle', dockIndex)}
+            title={single ? 'Wróć do widoku czterech streamów' : 'Pokaż tylko ten stream (solo widok + dźwięk)'}
           >
-            ⊡
+            {single ? '⊞' : '⊡'}
           </button>
 
           {/* Change stream */}

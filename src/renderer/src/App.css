@@ -66,6 +66,16 @@ body {
   color: var(--accent);
   letter-spacing: -0.3px;
   margin-right: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolbar-logo-img {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  user-select: none;
 }
 
 .toolbar-sep {
@@ -580,6 +590,8 @@ body.is-dragging iframe {
   padding: 24px;
   width: 420px;
   max-width: 90vw;
+  max-height: 92vh;
+  overflow-y: auto;
 }
 .modal h2 {
   font-size: 16px;
@@ -806,4 +818,243 @@ body.is-dragging iframe {
   border: 1px solid;
   border-radius: 4px;
   flex-shrink: 0;
+}
+
+/* ── Media viewer (links from the Chatango chat) ──────────────────────────── */
+.media-viewer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.media-viewer {
+  width: min(1100px, 86vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
+  border: 1px solid var(--border-h);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+
+.media-viewer-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+}
+
+.media-viewer-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.media-viewer-docks {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 6px;
+}
+
+.media-viewer-label {
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.media-dock-btn {
+  min-width: 28px;
+  justify-content: center;
+}
+
+.media-dock-btn.taken {
+  opacity: 0.75;
+}
+
+.media-viewer-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+}
+
+.media-viewer-frame {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  max-height: calc(88vh - 46px);
+  border: none;
+  display: block;
+}
+
+/* Fit to the viewer — small chat images are scaled up, big ones down */
+.media-viewer-img {
+  width: 100%;
+  height: calc(80vh - 46px);
+  object-fit: contain;
+  display: block;
+}
+
+/* Chatango: covers the raw page until the chat is styled and loaded */
+.chat-loading-cover {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #101010;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+/* ── Favourites menu (toolbar) ─────────────────────────────────────── */
+.fav-menu-wrap { position: relative; }
+
+.fav-menu-shield {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  -webkit-app-region: no-drag;
+}
+
+.fav-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 4001;
+  width: 460px;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-h);
+  border-radius: 10px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+  -webkit-app-region: no-drag;
+}
+
+.fav-empty {
+  padding: 10px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.fav-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px;
+  border-radius: var(--radius-sm);
+}
+.fav-row:hover { background: var(--bg-3); }
+.fav-row.editing { background: var(--bg-3); padding: 8px; }
+
+.fav-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.fav-platform { font-size: 11px; font-weight: 600; flex-shrink: 0; }
+.fav-label { overflow: hidden; text-overflow: ellipsis; color: var(--text-1); }
+
+.fav-docks { display: inline-flex; gap: 3px; margin-right: 4px; flex-shrink: 0; }
+.fav-dock-btn {
+  min-width: 26px;
+  height: 26px;
+  padding: 0;
+  justify-content: center;
+}
+.fav-dock-btn.here { border-color: var(--accent); color: var(--accent); }
+
+.fav-row .history-action { height: 26px; }
+
+.fav-editor {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.fav-editor-label { font-size: 11px; color: var(--text-2); margin-top: 2px; }
+.fav-editor-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
+
+.settings-section {
+  margin: 4px 0 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+/* ── Flexible 2×2 grid (drag the crossing point or a line) ─────────── */
+.dock-grid.quad { position: relative; }
+
+.grid-line {
+  position: absolute;
+  z-index: 20;
+  background: transparent;
+  transition: background 0.12s;
+}
+.grid-line-v { top: 0; bottom: 0; width: 8px; margin-left: -4px; cursor: col-resize; }
+.grid-line-h { left: 0; right: 0; height: 8px; margin-top: -4px; cursor: row-resize; }
+.grid-line:hover,
+.grid-line.active { background: rgba(139, 92, 246, 0.35); }
+
+/* hover zone around the crossing point; the handle inside is invisible
+   until the pointer is over the zone (or while dragging) */
+.grid-handle-zone {
+  position: absolute;
+  z-index: 21;
+  width: 28px;
+  height: 28px;
+  margin: -14px 0 0 -14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: move;
+}
+
+.grid-handle {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  transform: scale(0.6);
+  transition: transform 0.12s, opacity 0.12s;
+  pointer-events: none;
+}
+.grid-handle-zone:hover .grid-handle,
+.grid-handle-zone.active .grid-handle { opacity: 1; transform: scale(1); }
+
+.grid-drag-shield {
+  position: absolute;
+  inset: 0;
+  z-index: 19;
 }

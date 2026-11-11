@@ -1,3 +1,6 @@
+import logoUrl from '../assets/logo.png'
+import FavoritesMenu from './FavoritesMenu'
+
 export default function Toolbar({
   layout,
   multiAudio,
@@ -7,13 +10,21 @@ export default function Toolbar({
   onToggleMultiAudio,
   onToggleMuteAll,
   onToggleAlwaysOnTop,
+  fullScreen,
+  onToggleFullScreen,
   onOpenSettings,
   dualChat,
   onDualChatChange,
+  favorites,
+  docks,
+  onDockAction,
 }) {
   return (
     <div className="toolbar">
-      <span className="toolbar-logo">⚡ KWS</span>
+      <span className="toolbar-logo">
+        <img src={logoUrl} alt="" className="toolbar-logo-img" draggable={false} />
+        KWS
+      </span>
       <span className="toolbar-sep" />
 
       <div className="toolbar-group" title="Układ docków ze streamami">
@@ -84,6 +95,8 @@ export default function Toolbar({
         </div>
       </div>
 
+      <FavoritesMenu favorites={favorites} docks={docks} onDockAction={onDockAction} />
+
       <span className="toolbar-spacer" />
 
       <button
@@ -92,6 +105,14 @@ export default function Toolbar({
         title={alwaysOnTop ? 'Wyłącz przypięcie okna' : 'Przypnij okno na wierzchu'}
       >
         📌 {alwaysOnTop ? 'Przypięte' : 'Przypnij'}
+      </button>
+
+      <button
+        className={`btn ${fullScreen ? 'active' : ''}`}
+        onClick={onToggleFullScreen}
+        title={fullScreen ? 'Wyjdź z pełnego ekranu (F11)' : 'Pełny ekran (F11)'}
+      >
+        ⛶ {fullScreen ? 'Wyjdź' : 'Pełny ekran'}
       </button>
 
       <button

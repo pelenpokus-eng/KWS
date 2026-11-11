@@ -3,11 +3,14 @@ import Toolbar from './components/Toolbar'
 import DockGrid from './components/DockGrid'
 import ChatPanel from './components/ChatPanel'
 import SettingsModal from './components/SettingsModal'
+import MediaViewer, { classifyChatUrl } from './components/MediaViewer'
 import { parseStreamUrl, streamKey } from './utils/streamParser'
 import './App.css'
 
 function migrateChatConfig(cfg) {
   if (!cfg) return null
+  // "Chatango 2" became the only Chatango mode
+  if (cfg.type === 'chatango2') cfg = { ...cfg, type: cfg.baseType || 'chatango' }
   // Migrate stale URLs/room names to current room
   if (cfg.type === 'custom' && cfg.customUrl && cfg.customUrl.includes('st.chatango.com')) {
     return { type: 'chatango', room: 'chatraszei', customUrl: '' }
@@ -41,6 +44,7 @@ const DEFAULT_STATE = {
   dualChat: false,
   chatConfig2: null,
   chatSplit: 0.5,
+  gridSplit: { x: 0.5, y: 0.5 },
 }
 
 export default function App() {
@@ -54,11 +58,19 @@ export default function App() {
   const [dualChat, setDualChat] = useState(DEFAULT_STATE.dualChat)
   const [chatConfig2, setChatConfig2] = useState(DEFAULT_STATE.chatConfig2)
   const [chatSplit, setChatSplit] = useState(DEFAULT_STATE.chatSplit)
+  // flexible 2×2 grid: where the vertical (x) and horizontal (y) lines sit
+  const [gridSplit, setGridSplit] = useState(DEFAULT_STATE.gridSplit)
   const [muteAll, setMuteAll] = useState(false)
   const [enabledDocks, setEnabledDocks] = useState(() => new Set([0]))
   const [nativeMuted, setNativeMuted] = useState({})
   const [alwaysOnTop, setAlwaysOnTop] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  // Link / image / video clicked in the Chatango chat -> viewer, dock or browser
+  const [viewerUrl, setViewerUrl] = useState(null)
+  useEffect(() => window.electronAPI?.onChatOpenUrl?.(url => {
+    if (classifyChatUrl(url).kind === 'external') window.electronAPI?.openExternal(url)
+    else setViewerUrl(url)
+  }), [])
   const [loaded, setLoaded] = useState(false)
 
   // Load persisted state
@@ -78,8 +90,11 @@ export default function App() {
         if (typeof state.multiAudio === 'boolean') setMultiAudio(state.multiAudio)
         if (typeof state.muteAll === 'boolean') setMuteAll(state.muteAll)
         if (typeof state.dualChat === 'boolean') setDualChat(state.dualChat)
-        if (state.chatConfig2 && typeof state.chatConfig2 === 'object') setChatConfig2(state.chatConfig2)
+        if (state.chatConfig2 && typeof state.chatConfig2 === 'object') setChatConfig2(migrateChatConfig(state.chatConfig2))
         if (typeof state.chatSplit === 'number') setChatSplit(Math.max(0.2, Math.min(0.8, state.chatSplit)))
+        if (state.gridSplit && typeof state.gridSplit.x === 'number' && typeof state.gridSplit.y === 'number') {
+          setGridSplit({ x: Math.max(0.15, Math.min(0.85, state.gridSplit.x)), y: Math.max(0.15, Math.min(0.85, state.gridSplit.y)) })
+        }
       }
       setLoaded(true)
     }).catch(() => setLoaded(true))
@@ -108,10 +123,18 @@ export default function App() {
         dualChat,
         chatConfig2,
         chatSplit,
+        gridSplit,
       })
     }, 300)
     return () => clearTimeout(t)
-  }, [docks, layout, chatConfig, activeAudioDock, multiAudio, muteAll, streamHistory, favorites, dualChat, chatConfig2, chatSplit, loaded])
+  }, [docks, layout, chatConfig, activeAudioDock, multiAudio, muteAll, streamHistory, favorites, dualChat, chatConfig2, chatSplit, gridSplit, loaded])
+
+  // Fullscreen state comes from main (button and F11 both toggle it there)
+  const [fullScreen, setFullScreen] = useState(false)
+  useEffect(() => {
+    window.electronAPI?.isFullScreen?.().then(f => setFullScreen(!!f)).catch(() => {})
+    return window.electronAPI?.onFullScreenChanged?.(setFullScreen)
+  }, [])
 
   // Always on top
   useEffect(() => {
@@ -156,6 +179,13 @@ export default function App() {
 
   const handleDockAction = useCallback((action, dockIndex, payload) => {
     switch (action) {
+      case 'openFavorite': {
+        // Favourite from the toolbar menu -> dock. Re-parse the link so an old
+        // embed-URL format gets refreshed; the user's name for it stays.
+        const fresh = payload.originalUrl ? parseStreamUrl(payload.originalUrl) : null
+        payload = fresh ? { ...fresh, label: payload.label } : payload
+      }
+      // falls through
       case 'setStream':
         setDocks(prev => {
           const next = [...prev]
@@ -195,6 +225,28 @@ export default function App() {
         break
       }
 
+      case 'updateFavorite': {
+        // payload: { oldKey, fav } — edited name and/or link
+        const { oldKey, fav } = payload
+        const newKey = streamKey(fav)
+        if (!newKey) break
+        setFavorites(prev => {
+          const i = prev.findIndex(f => streamKey(f) === oldKey)
+          if (i < 0) return prev
+          // a changed link may now equal another favourite: keep just this one
+          const next = prev.filter((f, j) => j === i || streamKey(f) !== newKey)
+          next[next.indexOf(prev[i])] = fav
+          return next
+        })
+        // only the name changed: docks playing this stream show the new name
+        if (newKey === oldKey) {
+          setDocks(prev => prev.some(d => d.embedUrl && streamKey(d) === oldKey && d.label !== fav.label)
+            ? prev.map(d => (d.embedUrl && streamKey(d) === oldKey ? { ...d, label: fav.label } : d))
+            : prev)
+        }
+        break
+      }
+
       case 'remove':
         setDocks(prev => {
           const next = [...prev]
@@ -215,6 +267,10 @@ export default function App() {
         } else {
           setActiveAudioDock(dockIndex)
         }
+        break
+
+      case 'showQuad':
+        setLayout('quad')
         break
 
       case 'focusSingle':
@@ -284,10 +340,15 @@ export default function App() {
         }}
         onToggleMuteAll={() => setMuteAll(p => !p)}
         onToggleAlwaysOnTop={() => setAlwaysOnTop(p => !p)}
+        fullScreen={fullScreen}
+        onToggleFullScreen={() => window.electronAPI?.toggleFullScreen()}
         onOpenSettings={() => setShowSettings(true)}
         dualChat={dualChat}
         // 2nd pane starts empty (chooser) - nothing opens automatically
         onDualChatChange={setDualChat}
+        favorites={favorites}
+        docks={docks}
+        onDockAction={handleDockAction}
       />
 
       <div className="app-body">
@@ -297,6 +358,8 @@ export default function App() {
           activeAudioDock={activeAudioDock}
           multiAudio={multiAudio}
           enabledDocks={enabledDocks}
+          split={gridSplit}
+          onSplitChange={setGridSplit}
           muteAll={muteAll}
           nativeMuted={nativeMuted}
           streamHistory={streamHistory}
@@ -315,10 +378,31 @@ export default function App() {
         />
       </div>
 
+      {viewerUrl && (
+        <MediaViewer
+          url={viewerUrl}
+          docks={docks}
+          onOpenInDock={(i, stream) => handleDockAction('setStream', i, stream)}
+          onClose={() => setViewerUrl(null)}
+        />
+      )}
+
       {showSettings && (
         <SettingsModal
           chatConfig={chatConfig}
-          onSave={(config) => { setChatConfig(config); setShowSettings(false) }}
+          onSave={(config) => {
+            setChatConfig(prev => {
+              // Same chat source (only e.g. the font changed): keep whatever the
+              // pane shows now (a Kick/Twitch chat stays), just update settings
+              const prevBase = prev.type === 'twitch' || prev.type === 'kick' ? (prev.baseType || 'chatango') : prev.type
+              const same = config.type === prevBase
+                && config.room === (prev.room || 'chatraszei')
+                && config.customUrl === (prev.customUrl || '')
+              const fonts = { fontPct: config.fontPct, kickFontPct: config.kickFontPct, twitchFontPct: config.twitchFontPct }
+              return same ? { ...prev, ...fonts } : config
+            })
+            setShowSettings(false)
+          }}
           onClose={() => setShowSettings(false)}
         />
       )}

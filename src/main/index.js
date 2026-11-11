@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, protocol, webContents, webFrameMain, net } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, protocol, webContents, webFrameMain, net, shell } from 'electron'
 import { join } from 'path'
 import Store from 'electron-store'
 import { writeFileSync, readFile } from 'fs'
@@ -51,22 +51,6 @@ function startRendererServer() {
     })
     srv.listen(0, '127.0.0.1', () => resolve(srv.address().port))
   })
-}
-
-function chatWrapperHtml(room) {
-  const safeRoom = room.replace(/[^a-zA-Z0-9_-]/g, '')
-  return `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8">
-<style>*{margin:0;padding:0;box-sizing:border-box}html,body{width:100%;height:100%;overflow:hidden;background:#1a1a1a}</style>
-</head>
-<body>
-<script>
-var s=document.createElement('script');s.async=true;s.setAttribute('data-cfasync','false');
-s.setAttribute('data-cid','${safeRoom}');s.style.cssText='width:100%;height:100%;';
-s.src='https://st.chatango.com/js/gz/emb.js';document.body.appendChild(s);
-</script>
-</body></html>`
 }
 
 function streamWrapperHtml(src) {
@@ -146,11 +130,6 @@ app.whenReady().then(() => {
   // Handle appstream:// — serves a full-viewport iframe wrapper for any player URL
   protocol.handle('appstream', (request) => {
     const url = new URL(request.url)
-    if (url.hostname === 'chat') {
-      const room = url.searchParams.get('room') || 'raszei'
-      const html = chatWrapperHtml(room)
-      return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
-    }
     // hostname 'localhost' used so Twitch parent=localhost check passes
     const src = url.searchParams.get('src') || ''
     const html = streamWrapperHtml(src)
@@ -604,155 +583,248 @@ app.whenReady().then(() => {
     return { twitch: dedupe(twitch), kick: dedupe(kick) }
   })
 
-  const CHATANGO_DARK_CSS = `
-    html, body { overflow: hidden !important; height: 100% !important; margin: 0 !important; padding: 0 !important; }
-    * { background-color: #0d0d10 !important; }
-    img, video, canvas, svg { background-color: transparent !important; }
-    [style*="background-image"] { background-color: transparent !important; }
-
-    body, div, span, p, td, li, input, textarea, button, a, table, tr, th {
-      font-family: -apple-system, 'Segoe UI', system-ui, sans-serif !important;
-      font-size: 13px !important;
-      line-height: 1.55 !important;
+  // ── Chatango: chat only + links handled by the app ─────────────────────
+  // The room page is a table: logo/ad row, description row, then the chat
+  // iframe (st.chatango.com/h5/...), plus a bottom bar. Instead of hiding
+  // those by selectors, the chat iframe itself is pinned over the whole
+  // page, so whatever Chatango puts around it is simply covered. It is also
+  // shifted up by the height of the chat's own room-URL strip (#HEAD, measured
+  // from the chat frame into --kws-shift): hiding #HEAD inside the chat made
+  // Chatango's layout overflow; pushing it off-screen keeps its native layout.
+  const CHATANGO_COMPACT_JS = `(function(){
+    var css = 'html,body{overflow:hidden!important;margin:0!important}' +
+      'iframe.kws-chat{position:fixed!important;left:0!important;top:calc(-1 * var(--kws-shift, 0px))!important;' +
+      'width:100vw!important;height:calc(100vh + var(--kws-shift, 0px))!important;max-width:none!important;max-height:none!important;' +
+      'border:0!important;margin:0!important;z-index:2147483647!important;visibility:visible!important}';
+    var st = document.getElementById('kws-compact');
+    if (!st) { st = document.createElement('style'); st.id = 'kws-compact'; (document.head || document.documentElement).appendChild(st); }
+    st.textContent = css;
+    function pin() {
+      var f = document.querySelector('iframe[src*="st.chatango.com/h5"], #flashcontent iframe');
+      if (f && !f.classList.contains('kws-chat')) f.classList.add('kws-chat');
+      return !!f;
     }
-
-    input, textarea, select, [contenteditable] {
-      background-color: #1a1a20 !important;
-      border: 1px solid #2c2c35 !important;
-      border-radius: 8px !important;
-      padding: 7px 12px !important;
-      caret-color: #7b8cde !important;
-      transition: border-color .15s !important;
+    pin();
+    if (!window.__kwsCompact) {
+      window.__kwsCompact = true;
+      // Chatango may rebuild the iframe (reconnect, room switch)
+      new MutationObserver(pin).observe(document.documentElement, { childList: true, subtree: true });
     }
-    input:focus, textarea:focus, [contenteditable]:focus {
-      outline: none !important;
-      border-color: #3d3d52 !important;
-    }
-    ::placeholder { color: #4a4a5a !important; opacity: 1 !important; }
-
-    a { color: #6b8fd4 !important; }
-    a:hover { color: #89a7e6 !important; }
-
-    button, [role="button"], a, label { cursor: pointer !important; }
-
-    .topbar { display: none !important; height: 0 !important; overflow: hidden !important; }
-    table { border-collapse: collapse !important; border: none !important; }
-    td, th, tr { border: none !important; border-width: 0 !important; }
-
-    ::-webkit-scrollbar { width: 4px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #2a2a35; border-radius: 4px; }
-    ::-webkit-scrollbar-thumb:hover { background: #38384a; }
-  `
-
-  // Inline !important styles beat Chatango's own inline styles and !important CSS rules.
-  // Elements with background-image get transparent bg so the image shows through.
-  const CHATANGO_DARK_JS = `(function(){
-    var SKIP = {img:1,video:1,canvas:1,svg:1,script:1,style:1,link:1,meta:1,head:1,html:1};
-    var busy = typeof WeakSet !== 'undefined' ? new WeakSet() : null;
-    function isDarkColor(c) {
-      var m = c.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
-      if (!m) return false;
-      return +m[1] < 80 && +m[2] < 80 && +m[3] < 80;
-    }
-    function apply(el) {
-      if (!el || el.nodeType !== 1) return;
-      if (busy && busy.has(el)) return;
-      var tag = el.tagName.toLowerCase();
-      if (SKIP[tag]) return;
-      if (el.classList && el.classList.contains('topbar')) {
-        el.style.setProperty('display', 'none', 'important');
-        return;
-      }
-      try {
-        var cs = getComputedStyle(el);
-        var bgImg = cs.backgroundImage;
-        var hasBgImg = bgImg && bgImg !== 'none' && bgImg.indexOf('url') !== -1;
-        if (hasBgImg || (el.querySelector && el.querySelector('img,video'))) {
-          el.style.setProperty('background-color', 'transparent', 'important');
-          return;
-        }
-        if (busy) { busy.add(el); setTimeout(function(){ busy.delete(el); }, 150); }
-        if (tag === 'table' || tag === 'tr' || tag === 'td' || tag === 'th') {
-          el.style.setProperty('border', 'none', 'important');
-          if (tag === 'table') el.removeAttribute('border');
-        }
-        if (tag === 'input' || tag === 'textarea' || tag === 'select') {
-          el.style.setProperty('background-color', '#1a1a20', 'important');
-          el.style.setProperty('border-color', '#2c2c35', 'important');
-          el.style.setProperty('border-radius', '8px', 'important');
-        } else if (el.isContentEditable) {
-          var pos = cs.position;
-          if (pos === 'absolute' || pos === 'fixed') {
-            el.style.setProperty('background-color', 'transparent', 'important');
-          } else {
-            el.style.setProperty('background-color', '#1a1a20', 'important');
-            el.style.setProperty('border-color', '#2c2c35', 'important');
-            el.style.setProperty('border-radius', '8px', 'important');
-          }
-        } else {
-          el.style.setProperty('background-color', '#0d0d10', 'important');
-        }
-        if (isDarkColor(cs.color)) {
-          el.style.setProperty('color', '#d0d0d8', 'important');
-        }
-      } catch(e) {}
-    }
-    document.querySelectorAll('*').forEach(apply);
-    if (!window.__kwsMO) {
-      window.__kwsMO = true;
-      new MutationObserver(function(muts) {
-        muts.forEach(function(m) {
-          if (m.type === 'attributes') { apply(m.target); }
-          else { m.addedNodes.forEach(function(n) {
-            if (n.nodeType !== 1) return;
-            var t = n.tagName.toLowerCase();
-            if ((t === 'img' || t === 'video') && n.parentElement) apply(n.parentElement);
-            apply(n);
-            try { n.querySelectorAll('*').forEach(apply); } catch(e){}
-          }); }
-        });
-      }).observe(document.documentElement, {
-        childList: true, subtree: true,
-        attributes: true, attributeFilter: ['style', 'class']
-      });
-    }
+    return pin();
   })()`
 
-  async function injectIntoFrame(frame, cssScript) {
-    try { await frame.executeJavaScript(cssScript) } catch {}
-    try { await frame.executeJavaScript(CHATANGO_DARK_JS) } catch {}
+  // Inside the chat iframe: give the chat the app's background. Surgical overrides of Chatango's own rules only —
+  // no blanket recolouring, so user colours (inline styles), images, hover
+  // previews and videos stay exactly as Chatango draws them.
+  const CHATANGO_FRAME_CSS = [
+    'html,body,#OWBG{background:#101010!important}',
+    '#CGW,#FTR,#IW{color:#d6d6d6}',
+    '.msg-fg,.msg .at-quote{color:#d6d6d6!important}',
+    '.ubdr,#OW,.msg{border-color:#242424!important}',
+    '#IWW #input-field{background:#1a1a1a!important;color:#e0e0e0!important;border-color:#2c2c2c!important}',
+    '.input-field[contenteditable="true"]:empty:not(:focus)::before{color:#777!important}',
+    '.kws-nosel,.kws-nosel *{-webkit-user-select:none!important;user-select:none!important}',
+  ].join('')
+  const CHATANGO_FRAME_JS = `(function(){
+    if (!document.getElementById('kws-compact-frame')) {
+      var st = document.createElement('style'); st.id = 'kws-compact-frame';
+      st.textContent = ${JSON.stringify(CHATANGO_FRAME_CSS)};
+      (document.head || document.documentElement).appendChild(st);
+    }
+    // Chatango's scrollbar is a plain div next to the message list (#OM in
+    // #OMW). Dragging it selected message text, and dragging over a selection
+    // starts a native drag that swallows mouseup — the scrollbar then stuck
+    // to the cursor. While it is held: no text selection, no native drag; and
+    // a move with no button pressed hands Chatango the mouseup it missed.
+    if (!window.__kwsNoSel) {
+      window.__kwsNoSel = true;
+      var root = document.documentElement;
+      var held = function(){ return root.classList.contains('kws-nosel'); };
+      var release = function(){ root.classList.remove('kws-nosel'); };
+      document.addEventListener('mousedown', function(e){
+        var t = e.target;
+        if (t && t.closest && t.closest('#OMW') && !t.closest('#OM')) {
+          root.classList.add('kws-nosel');
+          try { getSelection().removeAllRanges(); } catch(_) {}
+        }
+      }, true);
+      window.addEventListener('mouseup', release, true);
+      document.addEventListener('dragstart', function(e){ if (held()) e.preventDefault(); }, true);
+      document.addEventListener('mousemove', function(e){
+        if (held() && e.buttons === 0) {
+          release();
+          document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: e.clientX, clientY: e.clientY }));
+        }
+      }, true);
+    }
+    // bottom edge of the room-URL strip = how far to push the frame up;
+    // msgs = chat history already drawn (the app shows the chat only then)
+    var h = document.getElementById('HEAD');
+    return {
+      shift: h ? Math.round(h.getBoundingClientRect().bottom) : 0,
+      msgs: document.querySelectorAll('#OW .msg').length
+    };
+  })()`
+  const isChatFrame = (f) => !!f && /st\.chatango\.com\/h5\//.test(f.url || '')
+
+  // Message text size (Settings → Chatango): #OM is the message list, its
+  // texts use % sizes, so one rule scales messages only — not the input or
+  // toolbar. After a change the list is wheeled to the bottom (Chatango keeps
+  // its old scroll offset otherwise).
+  const chatangoFontJs = (pct) => `(function(p){
+    var s = document.getElementById('kws-font');
+    if (!s) { s = document.createElement('style'); s.id = 'kws-font'; (document.head || document.documentElement).appendChild(s); }
+    if (window.__kwsFont === p) return;
+    var first = window.__kwsFont === undefined;
+    window.__kwsFont = p;
+    s.textContent = p === 100 ? '' : '#OM{font-size:' + p + '%!important}';
+    if (first) return;
+    // Chatango scrolls on the legacy 'mousewheel' event from inside the list
+    setTimeout(function(){
+      var m = document.querySelector('#OM .msg');
+      if (!m) return;
+      var e = new Event('mousewheel', { bubbles: true, cancelable: true });
+      e.wheelDelta = -1000000; e.wheelDeltaY = -1000000;
+      m.dispatchEvent(e);
+    }, 50);
+  })(${Number(pct) || 100})`
+
+  // Styles the chat frame; resolves to the number of messages shown (-1 = failed)
+  async function styleChatFrame(wc, f) {
+    try {
+      await f.executeJavaScript(chatangoFontJs(wc._kwsFont)).catch(() => {})
+      const r = await f.executeJavaScript(CHATANGO_FRAME_JS)
+      const shift = Number(r?.shift) || 0
+      if (!wc.isDestroyed() && shift > 0 && shift < 80) {
+        await wc.mainFrame.executeJavaScript(`document.documentElement.style.setProperty('--kws-shift', '${shift}px')`)
+      }
+      return Number(r?.msgs) || 0
+    } catch { return -1 }
   }
 
-  ipcMain.handle('inject-chatango-dark', async (_, webviewId) => {
+  const isHttpUrl = (u) => { try { return /^https?:$/.test(new URL(u).protocol) } catch { return false } }
+
+  ipcMain.handle('chatango-compact', async (_, webviewId, fontPct) => {
     try {
       const wc = webContents.fromId(Number(webviewId))
-      if (!wc || wc.isDestroyed()) return
-      const cssScript = `(function(){
-        var el = document.getElementById('kws-dark');
-        if (!el) { el = document.createElement('style'); el.id = 'kws-dark'; (document.head || document.documentElement).appendChild(el); }
-        el.textContent = ${JSON.stringify(CHATANGO_DARK_CSS)};
-      })()`
-      // Inject into all frames currently loaded
-      for (const frame of wc.mainFrame.framesInSubtree) {
-        await injectIntoFrame(frame, cssScript)
-      }
-      // Inject into every future frame as it finishes loading (catches async iframes)
-      if (!wc._kwsDarkAttached) {
-        wc._kwsDarkAttached = true
-        wc.on('did-frame-finish-load', async (_, _isMain, pid, routingId) => {
+      if (!wc || wc.isDestroyed()) return false
+      const pct = Math.max(50, Math.min(300, Math.round(Number(fontPct) || 100)))
+      wc._kwsFont = pct
+      // Links, image thumbnails and videos open with target=_blank — don't
+      // spawn bare Electron windows; the app decides (viewer, dock, browser)
+      if (!wc._kwsLinkHandler) {
+        wc._kwsLinkHandler = true
+        wc.setWindowOpenHandler(({ url }) => {
+          if (isHttpUrl(url) && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat-open-url', url)
+          return { action: 'deny' }
+        })
+        // A link that would navigate the chat page itself away from Chatango
+        wc.on('will-navigate', (e, url) => {
           try {
-            const frame = webFrameMain.fromId(pid, routingId)
-            if (frame) await injectIntoFrame(frame, cssScript)
+            if (/(^|\.)chatango\.com$/.test(new URL(url).hostname)) return
+          } catch {}
+          e.preventDefault()
+          if (isHttpUrl(url) && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat-open-url', url)
+        })
+        wc.on('did-frame-finish-load', (_, _isMain, pid, routingId) => {
+          try {
+            const f = webFrameMain.fromId(pid, routingId)
+            if (isChatFrame(f)) styleChatFrame(wc, f)
           } catch {}
         })
       }
+      // Pin first (the shift var lands on the pinned frame), then style the
+      // chat. Ready = frame pinned + styled + chat history drawn; the
+      // renderer keeps a dark cover over the chat until then.
+      const pinned = await wc.mainFrame.executeJavaScript(CHATANGO_COMPACT_JS)
+      let msgs = -1
+      for (const f of wc.mainFrame.framesInSubtree) {
+        if (isChatFrame(f)) msgs = Math.max(msgs, await styleChatFrame(wc, f))
+      }
+      return { pinned: !!pinned, styled: msgs >= 0, msgs: Math.max(0, msgs) }
+    } catch { return false }
+  })
+
+  // ── Kick / Twitch chat font size (Settings) ─────────────────────────────
+  // Both chats size text in rem, so scaling the root font size enlarges the
+  // text (and rem paddings) without zooming the whole page. The page's own
+  // base size is remembered the first time, so 100% restores it exactly.
+  const remScaleJs = (pct) => `(function(p){
+    var r = document.documentElement;
+    if (window.__kwsBase === undefined) {
+      r.style.removeProperty('font-size');
+      window.__kwsBase = parseFloat(getComputedStyle(r).fontSize) || 16;
+    }
+    if (p === 100) r.style.removeProperty('font-size');
+    else r.style.setProperty('font-size', (window.__kwsBase * p / 100) + 'px', 'important');
+    return 1;
+  })(${Math.max(50, Math.min(300, Math.round(Number(pct) || 100)))})`
+
+  // Kick chat: its own webview
+  ipcMain.handle('set-chat-font', async (_, webviewId, pct) => {
+    try {
+      const wc = webContents.fromId(Number(webviewId))
+      if (!wc || wc.isDestroyed()) return
+      wc._kwsChatFont = pct
+      if (!wc._kwsChatFontHook) {
+        wc._kwsChatFontHook = true
+        wc.on('dom-ready', () => { wc.executeJavaScript(remScaleJs(wc._kwsChatFont)).catch(() => {}) })
+      }
+      await wc.executeJavaScript(remScaleJs(pct))
     } catch {}
+  })
+
+  // Twitch chat: an iframe in the main window (twitch.tv/embed/<ch>/chat)
+  let twitchChatFont = 100
+  const isTwitchChatFrame = (f) => !!f && /^https:\/\/(www\.)?twitch\.tv\/embed\/[^/]+\/chat/.test(f.url || '')
+  const applyTwitchChatFont = () => {
+    for (const f of mainWindow.webContents.mainFrame.framesInSubtree) {
+      if (isTwitchChatFrame(f)) f.executeJavaScript(remScaleJs(twitchChatFont)).catch(() => {})
+    }
+  }
+  mainWindow.webContents.on('did-frame-finish-load', (_, _isMain, pid, routingId) => {
+    if (twitchChatFont === 100) return
+    try {
+      const f = webFrameMain.fromId(pid, routingId)
+      if (isTwitchChatFrame(f)) f.executeJavaScript(remScaleJs(twitchChatFont)).catch(() => {})
+    } catch {}
+  })
+  ipcMain.handle('set-twitch-chat-font', (_, pct) => {
+    twitchChatFont = Math.max(50, Math.min(300, Math.round(Number(pct) || 100)))
+    applyTwitchChatFont()
+  })
+
+  ipcMain.handle('open-external', (_, url) => {
+    if (isHttpUrl(url)) shell.openExternal(url)
   })
 
   ipcMain.handle('set-always-on-top', (_, flag) => {
     mainWindow.setAlwaysOnTop(flag, 'floating')
   })
+
+  // ── Fullscreen (toolbar button + F11) ───────────────────────────────────
+  const toggleFullScreen = () => {
+    if (!mainWindow.isDestroyed()) mainWindow.setFullScreen(!mainWindow.isFullScreen())
+  }
+  const sendFullScreen = () => {
+    if (!mainWindow.isDestroyed()) mainWindow.webContents.send('fullscreen-changed', mainWindow.isFullScreen())
+  }
+  mainWindow.on('enter-full-screen', sendFullScreen)
+  mainWindow.on('leave-full-screen', sendFullScreen)
+  ipcMain.handle('toggle-fullscreen', () => { toggleFullScreen(); return mainWindow.isFullScreen() })
+  ipcMain.handle('is-fullscreen', () => mainWindow.isFullScreen())
+  // F11 must work wherever focus is — main window, a dock's webview or the
+  // chat webview — so hook every webContents of this window
+  const hookF11 = (wc) => {
+    wc.on('before-input-event', (e, input) => {
+      if (input.type === 'keyDown' && input.key === 'F11' && !input.isAutoRepeat) {
+        e.preventDefault()
+        toggleFullScreen()
+      }
+    })
+  }
+  hookF11(mainWindow.webContents)
+  mainWindow.webContents.on('did-attach-webview', (_, wc) => hookF11(wc))
 
   // Force webview guest viewport via Chrome DevTools Protocol
   ipcMain.handle('set-webview-size', async (_, guestId, width, height) => {
