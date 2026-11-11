@@ -5,6 +5,9 @@ import AddStreamModal from './AddStreamModal'
 // Twitch shows a "mature content" gate (Zacznij oglądać / Start Watching) that
 // keeps the stream paused+muted. Docks don't take mouse input, so click it for
 // the user — checked every second because it can appear after load too.
+// Cloudflare "checking your browser" page titles (PL / EN)
+const CHECK_TITLE = /cierpliwo|chwileczk|weryfikacj|just a moment|attention required|checking your browser/i
+
 const TWITCH_GATE_JS = `(function(){
   if (window.__kwsGate) return;
   window.__kwsGate = true;
@@ -51,6 +54,10 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
   const [isDragOver, setIsDragOver] = useState(false)
   const isEmpty = !dock.embedUrl
   const isYouTube = dock.platform === 'youtube'
+  // strumyk.cv sits behind Cloudflare: when the dock shows its check page,
+  // offer a window where the user passes it (docks don't take clicks)
+  const isCheckSite = dock.platform === 'strumyk'
+  const [needsCheck, setNeedsCheck] = useState(false)
   const isFavorite = !isEmpty && favorites.some(f => streamKey(f) === streamKey(dock))
 
   // Keep refs in sync for use inside event handlers
@@ -138,7 +145,8 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
         window.electronAPI?.setWebContentsMuted(id, muteAllRef.current || !hasAudioRef.current || volumeRef.current === 0)
         window.electronAPI?.setWebContentsVolume(id, volumeRef.current / 100)
         // Sites without an embed player: strip the page down to its video
-        if (dock.platform === 'showup') window.electronAPI?.focusVideoPlayer(id)
+        if (dock.platform === 'showup' || dock.platform === 'strumyk') window.electronAPI?.focusVideoPlayer(id)
+        if (isCheckSite) setNeedsCheck(CHECK_TITLE.test(wv.getTitle() || ''))
         if (dock.platform === 'twitch') wv.executeJavaScript(TWITCH_GATE_JS).catch(() => {})
       } catch {}
     }
@@ -166,16 +174,30 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
       console.warn(`[dock] webview gone (${e?.details?.reason || e?.reason || '?'}), reload in ${delay}ms`)
     }
 
+    // Site behind Cloudflare: its "are you human" page has a telltale title
+    const handleTitle = (e) => { if (isCheckSite) setNeedsCheck(CHECK_TITLE.test(e.title || '')) }
+
     wv.addEventListener('dom-ready', handleReady)
     wv.addEventListener('did-finish-load', handleFinish)
     wv.addEventListener('render-process-gone', handleGone)
+    wv.addEventListener('page-title-updated', handleTitle)
     return () => {
+      wv.removeEventListener('page-title-updated', handleTitle)
       clearTimeout(reloadTimer)
       wv.removeEventListener('dom-ready', handleReady)
       wv.removeEventListener('did-finish-load', handleFinish)
       wv.removeEventListener('render-process-gone', handleGone)
     }
   }, [liveSrc])
+
+  // strumyk.cv: reload once the user closes the check window (new cookies)
+  useEffect(() => {
+    if (!isCheckSite) return
+    return window.electronAPI?.onSiteSessionChanged?.(() => {
+      setNeedsCheck(false)
+      try { webviewRef.current?.reload() } catch {}
+    })
+  }, [isCheckSite])
 
   // ShowUp: reload after login/logout so the dock uses the new session cookies
   useEffect(() => {
@@ -249,6 +271,8 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
     <div
       ref={containerRef}
       className={`stream-dock ${hasAudio ? 'has-audio' : ''}${isDragOver ? ' drag-over' : ''}`}
+      data-copy-link={dock.originalUrl || dock.embedUrl}
+      data-copy-name={dock.label}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -270,6 +294,16 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
           allowpopups="true"
           style={{ position: 'absolute', inset: 0, border: 'none', pointerEvents: 'none' }}
         />
+      )}
+      {liveSrc && needsCheck && (
+        <div className="dock-check">
+          <div className="dock-check-title">Strona wymaga weryfikacji</div>
+          <div className="dock-check-text">strumyk.cv sprawdza, czy jesteś człowiekiem (Cloudflare). W aplikacji ta weryfikacja potrafi się zapętlać — wtedy otwórz stream w przeglądarce.</div>
+          <div className="dock-check-actions">
+            <button className="btn active" onClick={() => window.electronAPI?.openExternal(dock.embedUrl)}>↗ Otwórz w przeglądarce</button>
+            <button className="btn" onClick={() => window.electronAPI?.openSiteCheck(dock.embedUrl)}>Spróbuj weryfikacji tutaj</button>
+          </div>
+        </div>
       )}
 
       {/* Hover overlay controls */}

@@ -88,11 +88,14 @@ export default function FavoritesMenu({ favorites = [], docks = [], onDockAction
   return (
     <div className="fav-menu-wrap">
       <button
-        className={`btn ${open ? 'active' : ''}`}
+        className={`tb-fav ${open ? 'open' : ''}`}
         onClick={() => setOpen(o => !o)}
         title="Ulubione streamy — wybierz i wyślij do docka"
       >
-        ★ Ulubione{favorites.length ? ` (${favorites.length})` : ''}
+        <svg className="tb-fav-star" viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z" /></svg>
+        <span>Ulubione</span>
+        {favorites.length > 0 && <span className="tb-badge">{favorites.length}</span>}
+        <svg className="tb-caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
       </button>
 
       {open && (
@@ -120,7 +123,7 @@ export default function FavoritesMenu({ favorites = [], docks = [], onDockAction
                 )
               }
               return (
-                <div key={key} className="fav-row">
+                <div key={key} className="fav-row" data-copy-link={linkOf(f)} data-copy-name={f.label}>
                   <span className="fav-name" title={linkOf(f)}>
                     <span className="history-dot" style={{ color: m.color }}>■</span>
                     <span className="fav-platform" style={{ color: m.color }}>{m.name}</span>

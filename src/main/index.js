@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, protocol, webContents, webFrameMain, net, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, protocol, webContents, webFrameMain, net, shell, Menu, clipboard } from 'electron'
 import { join } from 'path'
 import Store from 'electron-store'
 import { writeFileSync, readFile } from 'fs'
@@ -85,7 +85,9 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     backgroundColor: '#0a0a0a',
-    titleBarStyle: 'default',
+    // No system title bar — the app's toolbar is the title bar (drag region)
+    // and has its own minimise / maximise / close buttons
+    frame: false,
     icon: appIcon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -471,6 +473,39 @@ app.whenReady().then(() => {
     })
   })
 
+  // ── Site check window (strumyk.cv behind Cloudflare) ───────────────────
+  // Docks don't take clicks, so a dock that lands on the site's "are you
+  // human" page offers this window: an ordinary page on the default session
+  // (shared with the docks) where the user completes the check themselves.
+  // Closing it reloads the docks of that site.
+  let siteCheckWin = null
+  ipcMain.handle('open-site-check', (_, rawUrl) => {
+    let url
+    try { url = new URL(String(rawUrl)) } catch { return }
+    if (url.protocol !== 'https:' || url.hostname !== 'strumyk.cv') return
+    if (siteCheckWin && !siteCheckWin.isDestroyed()) {
+      siteCheckWin.loadURL(url.toString())
+      siteCheckWin.focus()
+      return
+    }
+    siteCheckWin = new BrowserWindow({
+      width: 1100,
+      height: 800,
+      parent: mainWindow,
+      title: 'strumyk.cv — potwierdź weryfikację i zamknij okno',
+      backgroundColor: '#0a0a0a',
+      autoHideMenuBar: true,
+      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+    })
+    siteCheckWin.webContents.setAudioMuted(true)
+    siteCheckWin.on('page-title-updated', e => e.preventDefault())
+    siteCheckWin.loadURL(url.toString())
+    siteCheckWin.on('closed', () => {
+      siteCheckWin = null
+      if (!mainWindow.isDestroyed()) mainWindow.webContents.send('site-session-changed', 'strumyk.cv')
+    })
+  })
+
   ipcMain.handle('showup-logout', async () => {
     const ses = mainWindow.webContents.session
     const cookies = await ses.cookies.get({ domain: 'showup.tv' })
@@ -657,6 +692,29 @@ app.whenReady().then(() => {
         }
       }, true);
     }
+    // YouTube links show as a thumbnail (.video-thumb, img.youtube.com/vi/<id>/)
+    // that Chatango plays in a tiny in-chat player. Catch the click first
+    // (capture phase) and open the video through window.open instead — the
+    // app's window-open handler turns that into its own viewer popup.
+    if (!window.__kwsVideo) {
+      window.__kwsVideo = true;
+      var videoUrl = function(t){
+        var th = t && t.closest && t.closest('.video-thumb');
+        if (!th) return null;
+        var img = th.querySelector('img');
+        var m = img && /\\/vi\\/([A-Za-z0-9_-]{6,})\\//.exec(img.getAttribute('src') || '');
+        return m ? 'https://www.youtube.com/watch?v=' + m[1] : null;
+      };
+      ['mousedown', 'mouseup', 'click'].forEach(function(type){
+        document.addEventListener(type, function(e){
+          var url = videoUrl(e.target);
+          if (!url || e.button !== 0) return;
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          if (type === 'click') window.open(url, '_blank');
+        }, true);
+      });
+    }
     // bottom edge of the room-URL strip = how far to push the frame up;
     // msgs = chat history already drawn (the app shows the chat only then)
     var h = document.getElementById('HEAD');
@@ -798,6 +856,17 @@ app.whenReady().then(() => {
     if (isHttpUrl(url)) shell.openExternal(url)
   })
 
+  // Toolbar X: close the app (state is saved continuously by the renderer)
+  ipcMain.handle('quit-app', () => { app.quit() })
+  ipcMain.handle('window-minimize', () => { mainWindow.minimize() })
+  ipcMain.handle('window-toggle-maximize', () => {
+    if (mainWindow.isMaximized()) mainWindow.unmaximize(); else mainWindow.maximize()
+  })
+  ipcMain.handle('window-is-maximized', () => mainWindow.isMaximized())
+  const sendMax = () => { if (!mainWindow.isDestroyed()) mainWindow.webContents.send('maximized-changed', mainWindow.isMaximized()) }
+  mainWindow.on('maximize', sendMax)
+  mainWindow.on('unmaximize', sendMax)
+
   ipcMain.handle('set-always-on-top', (_, flag) => {
     mainWindow.setAlwaysOnTop(flag, 'floating')
   })
@@ -825,6 +894,48 @@ app.whenReady().then(() => {
   }
   hookF11(mainWindow.webContents)
   mainWindow.webContents.on('did-attach-webview', (_, wc) => hookF11(wc))
+
+  // ── Right-click menu (Electron has none by default) ─────────────────────
+  // Text fields: cut/copy/paste/select all; selected text: copy; links: copy
+  // address / open in browser. Over a dock, favourite or history entry the
+  // renderer first reports that stream's link and name ('context-extra'),
+  // which adds "copy stream link / name".
+  let ctxExtra = null
+  ipcMain.on('context-extra', (_, extra) => { ctxExtra = extra ? { ...extra, t: Date.now() } : null })
+
+  const showContextMenu = (wc, params, withExtra) => {
+    const extra = withExtra && ctxExtra && Date.now() - ctxExtra.t < 1000 ? ctxExtra : null
+    ctxExtra = null
+    const items = []
+    const sep = () => { if (items.length && items[items.length - 1].type !== 'separator') items.push({ type: 'separator' }) }
+    if (extra?.link) items.push({ label: 'Kopiuj link streamu', click: () => clipboard.writeText(extra.link) })
+    if (extra?.name) items.push({ label: 'Kopiuj nazwę', click: () => clipboard.writeText(extra.name) })
+    const link = params.linkURL
+    if (link && /^https?:/i.test(link)) {
+      sep()
+      items.push({ label: 'Kopiuj adres linku', click: () => clipboard.writeText(link) })
+      items.push({ label: 'Otwórz link w przeglądarce', click: () => shell.openExternal(link) })
+    }
+    if (params.isEditable) {
+      sep()
+      const f = params.editFlags || {}
+      items.push({ label: 'Wytnij', role: 'cut', enabled: !!f.canCut })
+      items.push({ label: 'Kopiuj', role: 'copy', enabled: !!f.canCopy })
+      items.push({ label: 'Wklej', role: 'paste', enabled: !!f.canPaste })
+      items.push({ type: 'separator' })
+      items.push({ label: 'Zaznacz wszystko', role: 'selectAll' })
+    } else if (params.selectionText && params.selectionText.trim()) {
+      sep()
+      items.push({ label: 'Kopiuj', role: 'copy' })
+    }
+    if (!items.length) return
+    Menu.buildFromTemplate(items).popup({ window: mainWindow })
+  }
+  mainWindow.webContents.on('context-menu', (_, params) => showContextMenu(mainWindow.webContents, params, true))
+  // chats and other webviews (docks ignore the mouse, so they never get here)
+  mainWindow.webContents.on('did-attach-webview', (_, wc) => {
+    wc.on('context-menu', (_, params) => showContextMenu(wc, params, false))
+  })
 
   // Force webview guest viewport via Chrome DevTools Protocol
   ipcMain.handle('set-webview-size', async (_, guestId, width, height) => {

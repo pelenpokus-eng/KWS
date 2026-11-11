@@ -152,7 +152,7 @@ export default function AddStreamModal({ dockIndex, streamHistory = [], favorite
   function renderQuickPick(item, isFav) {
     const m = getPlatformMeta(item.platform)
     return (
-      <div key={streamKey(item)} className="history-row">
+      <div key={streamKey(item)} className="history-row" data-copy-link={item.originalUrl || item.embedUrl} data-copy-name={item.label}>
         <button
           className="history-item"
           onClick={() => handleHistoryPick(item)}
@@ -215,7 +215,7 @@ export default function AddStreamModal({ dockIndex, streamHistory = [], favorite
           ref={inputRef}
           className="modal-input"
           type="text"
-          placeholder="np. raszei  —  lub https://twitch.tv/kanal, kick.com/kanal, showup.tv/kanal ..."
+          placeholder="np. raszei  —  lub https://twitch.tv/kanal, kick.com/kanal, showup.tv/kanal, strumyk.cv/#id ..."
           value={url}
           onChange={handleUrlChange}
           onKeyDown={handleSearchKey}

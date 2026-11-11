@@ -88,6 +88,23 @@ export function parseStreamUrl(rawUrl) {
       }
     }
 
+    // strumyk.cv — the stream id is in the URL fragment: strumyk.cv/#<id>.
+    // Like ShowUp there's no separate embed, so the dock loads the page and
+    // main isolates its <video> ('focus-video-player').
+    if (host === 'strumyk.cv') {
+      const id = decodeURIComponent(parsed.hash.replace(/^#!?\/?/, '')).trim()
+      if (id && /^[A-Za-z0-9_-]+$/.test(id)) {
+        return {
+          platform: 'strumyk',
+          type: 'live',
+          id,
+          label: `Strumyk: ${id}`,
+          originalUrl: url,
+          embedUrl: `https://strumyk.cv/#${id}`,
+        }
+      }
+    }
+
     // ShowUp.tv — no embeddable player, so the full room page is loaded in the
     // webview and main process isolates the <video> (see 'focus-video-player')
     if (host === 'showup.tv') {
@@ -124,6 +141,7 @@ export const PLATFORM_META = {
   kick:    { color: '#53fc18', emoji: '●', name: 'Kick' },
   showup:  { color: '#ff3d7f', emoji: '●', name: 'ShowUp' },
   streamable: { color: '#0f90fa', emoji: '●', name: 'Streamable' },
+  strumyk: { color: '#22d3ee', emoji: '●', name: 'Strumyk' },
   custom:  { color: '#6366f1', emoji: '●', name: 'Custom' },
 }
 

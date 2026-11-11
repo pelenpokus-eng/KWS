@@ -19,7 +19,7 @@ function FontPicker({ value, onChange }) {
   )
 }
 
-export default function SettingsModal({ chatConfig, onSave, onClose }) {
+export default function SettingsModal({ chatConfig, autoHideToolbar = false, onSave, onClose }) {
   const [room, setRoom] = useState(chatConfig.room || 'chatraszei')
   const [customUrl, setCustomUrl] = useState(chatConfig.customUrl || '')
   const [type, setType] = useState(['chatango', 'custom'].includes(chatConfig.type) ? chatConfig.type : (chatConfig.baseType || 'chatango'))
@@ -27,9 +27,10 @@ export default function SettingsModal({ chatConfig, onSave, onClose }) {
   const [fontPct, setFontPct] = useState(chatConfig.fontPct || 100)
   const [kickFontPct, setKickFontPct] = useState(chatConfig.kickFontPct || 100)
   const [twitchFontPct, setTwitchFontPct] = useState(chatConfig.twitchFontPct || 100)
+  const [hideBar, setHideBar] = useState(!!autoHideToolbar)
 
   function handleSave() {
-    onSave({ type, room: room.trim(), customUrl: customUrl.trim(), fontPct, kickFontPct, twitchFontPct })
+    onSave({ type, room: room.trim(), customUrl: customUrl.trim(), fontPct, kickFontPct, twitchFontPct, autoHideToolbar: hideBar })
   }
 
   function handleKey(e) {
@@ -43,6 +44,15 @@ export default function SettingsModal({ chatConfig, onSave, onClose }) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
         <h2>Ustawienia</h2>
+
+        <div className="modal-label">Górny pasek</div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
+          <button className={`btn ${!hideBar ? 'active' : ''}`} onClick={() => setHideBar(false)}>Zawsze widoczny</button>
+          <button className={`btn ${hideBar ? 'active' : ''}`} onClick={() => setHideBar(true)}>Ukrywaj automatycznie</button>
+          <span style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+            Ukryty pasek daje cały ekran na streamy — wysuwa się, gdy najedziesz kursorem na samą górę okna.
+          </span>
+        </div>
 
         <div className="modal-label">Typ chatu</div>
         <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>

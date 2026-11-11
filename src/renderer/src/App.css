@@ -18,6 +18,7 @@
   --border-h: #3a3a3a;
   --radius: 6px;
   --radius-sm: 4px;
+  --tb-h: 46px; /* toolbar height in the layout; 0 when it auto-hides */
 }
 
 body {
@@ -40,72 +41,219 @@ body {
 
 .app-body {
   display: flex;
-  height: calc(100vh - 46px);
+  height: calc(100vh - var(--tb-h));
   overflow: hidden;
   flex-shrink: 0;
 }
 
 /* ── Toolbar ───────────────────────────────────────────────── */
+/* Pill-grouped controls: segmented buttons inside dark capsules, one accent
+   for active states. Toolbar-only classes (tb-*), so .btn in dialogs stays. */
+:root {
+  --tb-bg: #0e0e11;
+  --tb-pill: #18181b;
+  --tb-line: rgba(255, 255, 255, 0.06);
+  --tb-hover: rgba(255, 255, 255, 0.06);
+  --tb-text: #a1a1aa;
+  --tb-accent: #7c3aed;
+  --tb-glow: 0 0 0 1px rgba(124, 58, 237, 0.55), 0 2px 12px rgba(124, 58, 237, 0.35);
+  --tb-radius: 10px;
+}
+
 .toolbar {
   height: 46px;
-  background: var(--bg-1);
-  border-bottom: 1px solid var(--border);
+  background: var(--tb-bg);
+  border-bottom: 1px solid var(--tb-line);
   display: flex;
   align-items: center;
-  padding: 0 10px;
-  gap: 6px;
+  padding: 0 12px;
+  gap: 10px;
   flex-shrink: 0;
   -webkit-app-region: drag;
 }
 
 .toolbar > * { -webkit-app-region: no-drag; }
+.toolbar-spacer { flex: 1; -webkit-app-region: drag; }
 
-.toolbar-logo {
-  font-weight: 700;
-  font-size: 14px;
-  color: var(--accent);
-  letter-spacing: -0.3px;
-  margin-right: 4px;
+.tb-logo {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-}
-
-.toolbar-logo-img {
-  width: 20px;
-  height: 20px;
-  object-fit: contain;
+  gap: 7px;
+  margin-right: 6px;
   user-select: none;
+  -webkit-app-region: drag;
 }
+.tb-logo-img { width: 22px; height: 22px; object-fit: contain; }
+.tb-logo-name { font-size: 14px; font-weight: 700; letter-spacing: -0.2px; color: #f4f4f5; }
+.tb-logo-sub { font-size: 12px; font-weight: 500; color: #71717a; }
 
-.toolbar-sep {
-  width: 1px;
-  height: 22px;
-  background: var(--border);
-  margin: 0 4px;
-}
-
-.toolbar-spacer { flex: 1; }
-
-/* Labelled control groups (Docki / Dźwięk) */
-.toolbar-group {
+/* Each group is one capsule with a violet outline: [Docki: (1)(4)] */
+.tb-pill {
   display: flex;
   align-items: center;
-  gap: 6px;
-  height: 36px;
-  padding: 0 4px 0 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-0);
+  gap: 2px;
+  height: 34px;
+  padding: 3px;
+  background: var(--tb-pill);
+  border: 1px solid rgba(124, 58, 237, 0.55);
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgba(124, 58, 237, 0.08);
 }
-.toolbar-group-label {
-  font-size: 10px;
+
+.tb-seg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 26px;
+  min-width: 28px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--tb-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.tb-seg:has(> .tb-ico:only-child) { padding: 0 7px; }
+.tb-seg:hover { background: var(--tb-hover); color: #f4f4f5; }
+.tb-seg.active { background: var(--tb-accent); color: #fff; box-shadow: var(--tb-glow); }
+.tb-seg.active:hover { background: #8b5cf6; }
+
+/* "Mute all" when on: a calm red, so muted state is obvious at a glance */
+.tb-seg.tb-mute.active {
+  background: rgba(239, 68, 68, 0.16);
+  color: #fca5a5;
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.45);
+}
+.tb-seg.tb-mute.active:hover { background: rgba(239, 68, 68, 0.26); }
+
+.tb-ico { display: inline-flex; width: 15px; height: 15px; }
+.tb-ico svg,
+.tb-fav svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Group name inside the capsule — [Docki: (1) (4)] — so it's clear which
+   toggles belong together and what they switch */
+.tb-pill-label {
+  padding: 0 6px 0 10px;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-2);
-  margin-right: 2px;
+  color: #71717a;
+  white-space: nowrap;
   user-select: none;
+}
+.tb-pill-label::after { content: ':'; }
+
+/* Switch with a sliding pill under the chosen option */
+.tb-switch {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.tb-switch-pill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #8b5cf6, #7c3aed);
+  box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.35), 0 2px 12px rgba(124, 58, 237, 0.45);
+  transition: transform 0.28s cubic-bezier(0.3, 0.7, 0.2, 1), width 0.28s cubic-bezier(0.3, 0.7, 0.2, 1);
+  pointer-events: none;
+}
+.tb-switch-opt {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--tb-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+.tb-switch-opt:hover { color: #f4f4f5; }
+.tb-switch-opt.on { color: #fff; cursor: default; }
+
+/* Standalone round button (settings) — same capsule look as the groups */
+.tb-round {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  background: var(--tb-pill);
+  border: 1px solid rgba(124, 58, 237, 0.55);
+  border-radius: 50%;
+  color: var(--tb-text);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.tb-round:hover { color: #fff; border-color: rgba(167, 139, 250, 0.9); background: rgba(124, 58, 237, 0.18); }
+.tb-round:hover .tb-ico { transform: rotate(45deg); }
+.tb-round .tb-ico { transition: transform 0.3s ease; }
+
+/* Close app: far right, turns red on hover */
+.tb-seg.tb-close:hover { background: #dc2626; color: #fff; box-shadow: 0 0 10px rgba(220, 38, 38, 0.45); }
+
+.tb-divider { width: 1px; height: 18px; margin: 0 3px; background: var(--tb-line); }
+
+/* Favourites dropdown trigger — a pill of its own */
+.tb-fav {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 12px 0 13px;
+  background: var(--tb-pill);
+  border: 1px solid rgba(124, 58, 237, 0.55);
+  border-radius: 999px;
+  color: var(--tb-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.tb-fav:hover { color: #f4f4f5; border-color: rgba(167, 139, 250, 0.9); }
+.tb-fav.open { color: #f4f4f5; border-color: rgba(124, 58, 237, 0.6); box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.15); }
+.tb-fav .tb-fav-star { width: 15px; height: 15px; color: #facc15; }
+.tb-fav .tb-caret { width: 13px; height: 13px; opacity: 0.6; transition: transform 0.2s ease; }
+.tb-fav.open .tb-caret { transform: rotate(180deg); }
+.tb-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #e4e4e7;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
 }
 
 .btn {
@@ -129,21 +277,6 @@ body {
 .btn.icon-only { padding: 0; width: 30px; justify-content: center; font-size: 15px; }
 .btn.danger:hover { background: var(--danger); border-color: var(--danger); color: #fff; }
 
-.layout-toggle {
-  display: flex;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-}
-.layout-toggle .btn {
-  border: none;
-  border-radius: 0;
-  margin: 0;
-}
-.layout-toggle .btn:not(:last-child) {
-  border-right: 1px solid var(--border);
-}
-
 /* ── Dock grid ─────────────────────────────────────────────── */
 .dock-grid {
   flex: 1;
@@ -152,7 +285,7 @@ body {
   background: #050505;
   min-width: 0;
   overflow: hidden;
-  height: calc(100vh - 46px);
+  height: calc(100vh - var(--tb-h));
 }
 .dock-grid.single  { grid-template-columns: 1fr; grid-template-rows: 1fr; }
 .dock-grid.quad    { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
@@ -204,7 +337,7 @@ body.is-dragging iframe {
   flex-direction: column;
   gap: 10px;
   cursor: pointer;
-  border: 2px dashed var(--border);
+  border: 2px dashed #34343b;
   background: var(--bg-0);
   transition: all 0.15s;
 }
@@ -213,16 +346,21 @@ body.is-dragging iframe {
   background: rgba(139,92,246,0.05);
 }
 .stream-dock.empty-dock .add-icon {
-  font-size: 28px;
-  color: var(--text-3);
+  font-size: 34px;
+  color: #a1a1aa;
   line-height: 1;
   transition: color 0.15s;
 }
 .stream-dock.empty-dock:hover .add-icon { color: var(--accent); }
+/* readable on the near-black dock: ~13:1 contrast (was #555, ~2.6:1) */
 .stream-dock.empty-dock .add-hint {
-  font-size: 12px;
-  color: var(--text-3);
+  font-size: 13px;
+  font-weight: 500;
+  color: #d4d4d8;
+  transition: color 0.15s;
 }
+.stream-dock.empty-dock:hover .add-hint { color: #fff; }
+.stream-dock.empty-dock .shortcut-hint { font-size: 11px; color: #8e8e96; }
 
 .dock-webview {
   display: block;
@@ -943,10 +1081,10 @@ body.is-dragging iframe {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  background: var(--bg-2);
-  border: 1px solid var(--border-h);
-  border-radius: 10px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+  background: var(--tb-pill);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--tb-radius);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
   -webkit-app-region: no-drag;
 }
 
@@ -963,7 +1101,8 @@ body.is-dragging iframe {
   padding: 3px 4px;
   border-radius: var(--radius-sm);
 }
-.fav-row:hover { background: var(--bg-3); }
+.fav-row { transition: background 0.2s ease; }
+.fav-row:hover { background: rgba(255, 255, 255, 0.04); }
 .fav-row.editing { background: var(--bg-3); padding: 8px; }
 
 .fav-name {
@@ -986,7 +1125,7 @@ body.is-dragging iframe {
   padding: 0;
   justify-content: center;
 }
-.fav-dock-btn.here { border-color: var(--accent); color: var(--accent); }
+.fav-dock-btn.here { border-color: var(--tb-accent); color: #c4b5fd; box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.4); }
 
 .fav-row .history-action { height: 26px; }
 
@@ -1056,5 +1195,261 @@ body.is-dragging iframe {
 .grid-drag-shield {
   position: absolute;
   inset: 0;
-  z-index: 19;
+  z-index: 40;
 }
+
+/* Dock on a site's Cloudflare check page (strumyk.cv) */
+.dock-check {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 20px;
+  text-align: center;
+  background: rgba(8, 8, 10, 0.92);
+  pointer-events: auto;
+}
+.dock-check-title { font-size: 15px; font-weight: 600; color: #f4f4f5; }
+.dock-check-text { max-width: 360px; font-size: 12px; line-height: 1.5; color: #a1a1aa; }
+.dock-check-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+
+/* ── Tube — 5th stream on the grid's crossing point ────────────────── */
+/* A glowing glass capsule with metal caps; it is also the grid handle. */
+.tube {
+  position: absolute;
+  z-index: 22;
+  transform: translate(-50%, -50%) scale(0.9);
+  cursor: move;
+  opacity: 0;
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+/* fade in / out (toolbar "Tuba") */
+.tube.shown { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+
+/* image look: the user's tube graphic, picture behind its glass */
+.tube.skin-image { filter: drop-shadow(0 0 14px rgba(56, 189, 248, 0.45)); }
+.tube.skin-image.dragging { filter: drop-shadow(0 0 22px rgba(56, 189, 248, 0.8)); }
+.tube.skin-image.framing { filter: drop-shadow(0 0 16px rgba(253, 230, 138, 0.8)); }
+.tube-video { position: absolute; overflow: hidden; pointer-events: none; background: #04121c; }
+.tube-skin { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; user-select: none; }
+.tube.skin-image .tube-controls { bottom: 36%; }
+
+
+.tube-screen {
+  position: absolute;
+  overflow: hidden;
+  border-radius: 12px;
+  background: radial-gradient(ellipse at center, #13132a 0%, #07070d 75%);
+  pointer-events: none;
+}
+.tube-cam {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1); /* mirrored, like a selfie camera */
+}
+.tube-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: #a5f3fc;
+}
+
+
+/* sound switch + settings, shown on hover */
+.tube-controls {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  cursor: default;
+}
+.tube:hover .tube-controls { opacity: 1; }
+.tube-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 6px;
+  border-radius: 50%;
+  border: 1px solid rgba(103, 232, 249, 0.6);
+  background: rgba(5, 11, 16, 0.85);
+  color: #a5f3fc;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.tube-btn svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.tube-btn:hover { background: rgba(34, 211, 238, 0.25); color: #fff; }
+.tube-btn.on { background: #0891b2; border-color: #67e8f9; color: #fff; }
+
+/* toolbar toggle: cyan when the tube is on */
+.tb-seg.tb-tube.active { background: #0891b2; box-shadow: 0 0 0 1px rgba(103, 232, 249, 0.5), 0 2px 12px rgba(34, 211, 238, 0.4); }
+
+/* Tube framing mode: pan / zoom the picture so the head fits the tube */
+.tube.framing { cursor: grab; }
+.tube.framing:active { cursor: grabbing; }
+.tube-frame-guide {
+  position: absolute;
+  z-index: 2;
+  transform: translate(-50%, -50%);
+  border: 1.5px dashed rgba(253, 230, 138, 0.85);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.tube-framebar {
+  position: absolute;
+  top: calc(100% + 14px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(253, 230, 138, 0.5);
+  background: rgba(10, 10, 14, 0.94);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
+  cursor: default;
+}
+.tube-framebar-hint { font-size: 11px; line-height: 1.4; text-align: center; color: #e4e4e7; }
+.tube-framebar-btns { display: flex; gap: 6px; }
+.tube-pill {
+  height: 24px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #18181b;
+  color: #e4e4e7;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tube-pill:hover { border-color: rgba(255, 255, 255, 0.35); }
+.tube-pill.on { background: #ca8a04; border-color: #fde68a; color: #fff; }
+
+/* ── "Ustawienia streamerskie" panel (tube settings) ───────────────── */
+/* Docked top-right under the toolbar so the tube stays visible while editing */
+.sp-shield { position: fixed; inset: 0; z-index: 4500; }
+.sp-panel {
+  position: fixed;
+  top: 54px;
+  right: 12px;
+  z-index: 4501;
+  width: 380px;
+  max-height: calc(100vh - 70px);
+  overflow-y: auto;
+  padding: 12px 14px 14px;
+  background: #18181b;
+  border: 1px solid rgba(124, 58, 237, 0.55);
+  border-radius: 14px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
+}
+.sp-head { display: flex; align-items: center; justify-content: space-between; font-size: 14px; font-weight: 700; color: #f4f4f5; margin-bottom: 4px; }
+.sp-x { width: 26px; height: 26px; border: none; border-radius: 50%; background: transparent; color: #a1a1aa; cursor: pointer; }
+.sp-x:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.sp-section {
+  margin: 12px 0 8px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: #a78bfa;
+}
+.sp-label { margin: 8px 0 5px; font-size: 11px; color: #a1a1aa; }
+.sp-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+.sp-row .modal-input { flex: 1; min-width: 0; }
+.sp-note { font-size: 11px; line-height: 1.5; color: #71717a; }
+.sp-val { width: 42px; text-align: right; font-size: 12px; color: #d4d4d8; font-variant-numeric: tabular-nums; }
+.sp-slider { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.sp-slider-label { width: 86px; font-size: 12px; color: #d4d4d8; }
+.sp-slider input { flex: 1; accent-color: #8b5cf6; }
+.tb-streamer .tb-ico { color: #a78bfa; }
+.tube-backdrop {
+  position: absolute;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 60% 45% at 50% 38%, rgba(56, 189, 248, 0.35), transparent 70%),
+    linear-gradient(90deg, #031a2b 0%, #06304d 30%, #0a3f63 50%, #06304d 70%, #031a2b 100%);
+}
+.tube-video { background: transparent; }
+
+/* ── Tube look "Ramka 4:3": flowing gradient border ────────────────── */
+/* --tube-angle is animated (registered with @property), so the colours of
+   a conic gradient travel around the frame; a blurred copy glows behind. */
+@property --tube-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: true;
+}
+.tube.skin-frame {
+  border-radius: 16px;
+  --tube-angle: 0deg;
+  background: conic-gradient(from var(--tube-angle), #7c3aed, #22d3ee, #34d399, #f472b6, #facc15, #7c3aed);
+  animation: tube-flow 4s linear infinite;
+}
+.tube-frame-glow {
+  position: absolute;
+  inset: -2px;
+  z-index: -1;
+  border-radius: 18px;
+  background: conic-gradient(from var(--tube-angle), #7c3aed, #22d3ee, #34d399, #f472b6, #facc15, #7c3aed);
+  filter: blur(14px);
+  opacity: 0.75;
+  pointer-events: none;
+}
+@keyframes tube-flow { to { --tube-angle: 360deg; } }
+.tube.skin-frame.dragging { animation-duration: 1.2s; }
+.tube.skin-frame.dragging .tube-frame-glow { opacity: 1; filter: blur(18px); }
+.tube.skin-frame.framing { animation-play-state: paused; }
+.tube-backdrop.frame { border-radius: 12px; background: radial-gradient(ellipse at center, #15152c 0%, #07070d 75%); }
+
+/* Narrow windows: drop toolbar text step by step so nothing overflows */
+@media (max-width: 1700px) { .tb-logo-sub { display: none; } }
+@media (max-width: 1560px) { .tb-pill-label { display: none; } }
+@media (max-width: 1380px) {
+  .tb-mute > span:not(.tb-ico), .tb-streamer > span:not(.tb-ico), .tb-fav > span:not(.tb-badge) { display: none; }
+  .tb-fav .tb-fav-star { display: inline; }
+}
+@media (max-width: 1180px) {
+  .tb-switch-opt > span:not(.tb-ico), .tb-tube > span:not(.tb-ico), .tb-logo-name { display: none; }
+}
+
+/* ── Auto-hiding toolbar (Settings → Górny pasek) ─────────────────── */
+/* The bar keeps its row in the layout, but the row's height (--tb-h) goes
+   46px ↔ 0 with a transition — the streams and chats get taller / shorter,
+   nothing is covered. --tb-h is registered so it can be animated. */
+@property --tb-h {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 46px;
+}
+.app { --tb-h: 46px; transition: --tb-h 0.25s ease; }
+.app.tb-autohide { --tb-h: 0px; }
+.app.tb-autohide.tb-open { --tb-h: 46px; }
+.app.tb-autohide .toolbar-wrap { position: relative; z-index: 4400; height: var(--tb-h); flex-shrink: 0; }
+/* the bar slides up with its row (margin, not transform: a transform would
+   break the position:fixed dropdown shields inside it); nothing is clipped */
+.app.tb-autohide .toolbar { margin-top: calc(var(--tb-h) - 46px); }
+.tb-hotzone { position: fixed; top: 0; left: 0; right: 0; height: 6px; z-index: 4399; }

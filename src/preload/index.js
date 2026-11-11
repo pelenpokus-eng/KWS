@@ -7,6 +7,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   saveScreenshot: (dataUrl, label) => ipcRenderer.invoke('save-screenshot', dataUrl, label),
   setAlwaysOnTop: (flag) => ipcRenderer.invoke('set-always-on-top', flag),
+  quitApp: () => ipcRenderer.invoke('quit-app'),
+  setContextExtra: (extra) => ipcRenderer.send('context-extra', extra),
+  minimizeWindow: () => ipcRenderer.invoke('window-minimize'),
+  toggleMaximizeWindow: () => ipcRenderer.invoke('window-toggle-maximize'),
+  isWindowMaximized: () => ipcRenderer.invoke('window-is-maximized'),
+  onMaximizedChanged: (cb) => {
+    const h = (_, flag) => cb(!!flag)
+    ipcRenderer.on('maximized-changed', h)
+    return () => ipcRenderer.removeListener('maximized-changed', h)
+  },
   toggleFullScreen: () => ipcRenderer.invoke('toggle-fullscreen'),
   isFullScreen: () => ipcRenderer.invoke('is-fullscreen'),
   onFullScreenChanged: (cb) => {
@@ -31,6 +41,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   focusVideoPlayer: (id) => ipcRenderer.invoke('focus-video-player', id),
   showupLogin: () => ipcRenderer.invoke('showup-login'),
+  openSiteCheck: (url) => ipcRenderer.invoke('open-site-check', url),
+  onSiteSessionChanged: (cb) => {
+    const h = (_, host) => cb(host)
+    ipcRenderer.on('site-session-changed', h)
+    return () => ipcRenderer.removeListener('site-session-changed', h)
+  },
   showupLogout: () => ipcRenderer.invoke('showup-logout'),
   onShowupSessionChanged: (cb) => {
     const h = () => cb()

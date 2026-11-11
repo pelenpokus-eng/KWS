@@ -1,9 +1,11 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import Toolbar from './components/Toolbar'
 import DockGrid from './components/DockGrid'
 import ChatPanel from './components/ChatPanel'
 import SettingsModal from './components/SettingsModal'
 import MediaViewer, { classifyChatUrl } from './components/MediaViewer'
+import { DEFAULT_TUBE } from './components/Tube'
+import StreamerPanel from './components/StreamerPanel'
 import { parseStreamUrl, streamKey } from './utils/streamParser'
 import './App.css'
 
@@ -45,6 +47,8 @@ const DEFAULT_STATE = {
   chatConfig2: null,
   chatSplit: 0.5,
   gridSplit: { x: 0.5, y: 0.5 },
+  tube: DEFAULT_TUBE,
+  autoHideToolbar: false,
 }
 
 export default function App() {
@@ -60,6 +64,29 @@ export default function App() {
   const [chatSplit, setChatSplit] = useState(DEFAULT_STATE.chatSplit)
   // flexible 2×2 grid: where the vertical (x) and horizontal (y) lines sit
   const [gridSplit, setGridSplit] = useState(DEFAULT_STATE.gridSplit)
+  // 5th stream — the camera tube on the grid's crossing point
+  const [tube, setTube] = useState(DEFAULT_STATE.tube)
+  // Auto-hiding toolbar (Settings): slides away, comes back at the top edge
+  const [autoHideToolbar, setAutoHideToolbar] = useState(false)
+  const [tbHover, setTbHover] = useState(false)
+  const tbHideTimer = useRef(null)
+  const showToolbar = useCallback(() => { clearTimeout(tbHideTimer.current); setTbHover(true) }, [])
+  const hideToolbarSoon = useCallback(() => {
+    clearTimeout(tbHideTimer.current)
+    tbHideTimer.current = setTimeout(() => setTbHover(false), 700)
+  }, [])
+  useEffect(() => () => clearTimeout(tbHideTimer.current), [])
+  useEffect(() => {
+    if (!autoHideToolbar || !tbHover) return
+    const onMove = (e) => {
+      if (e.clientY > 60 && !e.target.closest?.('.toolbar-wrap')) hideToolbarSoon()
+    }
+    window.addEventListener('mousemove', onMove)
+    return () => window.removeEventListener('mousemove', onMove)
+  }, [autoHideToolbar, tbHover, hideToolbarSoon])
+  const [showTubeSettings, setShowTubeSettings] = useState(false) // "Ustawienia streamerskie" panel
+  const [tubeFraming, setTubeFraming] = useState(false)
+  const updateTube = useCallback((patch) => setTube(prev => ({ ...prev, ...patch })), [])
   const [muteAll, setMuteAll] = useState(false)
   const [enabledDocks, setEnabledDocks] = useState(() => new Set([0]))
   const [nativeMuted, setNativeMuted] = useState({})
@@ -71,6 +98,36 @@ export default function App() {
     if (classifyChatUrl(url).kind === 'external') window.electronAPI?.openExternal(url)
     else setViewerUrl(url)
   }), [])
+
+  // Right-click over a dock / favourite / history entry: tell main which
+  // stream it is, so its menu can offer "copy link / name"
+  useEffect(() => {
+    const onCtx = (e) => {
+      const el = e.target.closest?.('[data-copy-link], [data-copy-name]')
+      window.electronAPI?.setContextExtra?.(el ? { link: el.dataset.copyLink || '', name: el.dataset.copyName || '' } : null)
+    }
+    window.addEventListener('contextmenu', onCtx, true)
+    return () => window.removeEventListener('contextmenu', onCtx, true)
+  }, [])
+
+  // A video opened from the chat mutes the docks while it plays; closing the
+  // viewer restores the sound as it was. If the docks were muted already, or
+  // the user unmutes them meanwhile, closing leaves the mute state alone.
+  const muteAllRef = useRef(muteAll)
+  muteAllRef.current = muteAll
+  const viewerMutedRef = useRef(false)
+  const viewerKind = viewerUrl ? classifyChatUrl(viewerUrl).kind : null
+  const viewerPlays = viewerKind === 'stream' || viewerKind === 'video'
+  useEffect(() => {
+    if (viewerPlays) {
+      if (!muteAllRef.current) { viewerMutedRef.current = true; setMuteAll(true) }
+    } else if (viewerMutedRef.current) {
+      viewerMutedRef.current = false
+      setMuteAll(false)
+    }
+  }, [viewerPlays, viewerUrl])
+  useEffect(() => { if (!muteAll) viewerMutedRef.current = false }, [muteAll])
+
   const [loaded, setLoaded] = useState(false)
 
   // Load persisted state
@@ -92,6 +149,8 @@ export default function App() {
         if (typeof state.dualChat === 'boolean') setDualChat(state.dualChat)
         if (state.chatConfig2 && typeof state.chatConfig2 === 'object') setChatConfig2(migrateChatConfig(state.chatConfig2))
         if (typeof state.chatSplit === 'number') setChatSplit(Math.max(0.2, Math.min(0.8, state.chatSplit)))
+        if (typeof state.autoHideToolbar === 'boolean') setAutoHideToolbar(state.autoHideToolbar)
+        if (state.tube && typeof state.tube === 'object') setTube({ ...DEFAULT_TUBE, ...state.tube })
         if (state.gridSplit && typeof state.gridSplit.x === 'number' && typeof state.gridSplit.y === 'number') {
           setGridSplit({ x: Math.max(0.15, Math.min(0.85, state.gridSplit.x)), y: Math.max(0.15, Math.min(0.85, state.gridSplit.y)) })
         }
@@ -117,17 +176,20 @@ export default function App() {
         chatConfig,
         activeAudioDock,
         multiAudio,
-        muteAll,
+        // a chat video's temporary mute is not a setting — save the real one
+        muteAll: viewerMutedRef.current ? false : muteAll,
         streamHistory,
         favorites,
         dualChat,
         chatConfig2,
         chatSplit,
         gridSplit,
+        tube,
+        autoHideToolbar,
       })
     }, 300)
     return () => clearTimeout(t)
-  }, [docks, layout, chatConfig, activeAudioDock, multiAudio, muteAll, streamHistory, favorites, dualChat, chatConfig2, chatSplit, gridSplit, loaded])
+  }, [docks, layout, chatConfig, activeAudioDock, multiAudio, muteAll, streamHistory, favorites, dualChat, chatConfig2, chatSplit, gridSplit, tube, autoHideToolbar, loaded])
 
   // Fullscreen state comes from main (button and F11 both toggle it there)
   const [fullScreen, setFullScreen] = useState(false)
@@ -324,8 +386,17 @@ export default function App() {
     return <div className="loading">Ładowanie...</div>
   }
 
+  // with auto-hide on, the toolbar still stays while something of it is open
+  const toolbarShown = !autoHideToolbar || tbHover || showSettings || showTubeSettings || !!viewerUrl
+
   return (
-    <div className="app">
+    <div className={`app ${autoHideToolbar ? 'tb-autohide' : ''} ${toolbarShown ? 'tb-open' : ''}`}>
+      {autoHideToolbar && <div className="tb-hotzone" onMouseEnter={showToolbar} />}
+      <div
+        className={`toolbar-wrap ${toolbarShown ? 'visible' : ''}`}
+        onMouseEnter={autoHideToolbar ? showToolbar : undefined}
+        onMouseLeave={autoHideToolbar ? hideToolbarSoon : undefined}
+      >
       <Toolbar
         layout={layout}
         multiAudio={multiAudio}
@@ -346,10 +417,23 @@ export default function App() {
         dualChat={dualChat}
         // 2nd pane starts empty (chooser) - nothing opens automatically
         onDualChatChange={setDualChat}
+        tubeOn={tube.enabled}
+        onOpenStreamer={() => setShowTubeSettings(s => !s)}
+        streamerOpen={showTubeSettings}
+        onToggleTube={() => {
+          // first time on, without a source: open its settings right away
+          const turningOn = !tube.enabled
+          updateTube({ enabled: turningOn })
+          if (turningOn) {
+            setLayout('quad')
+            if (tube.mode !== 'camera' && !tube.stream?.embedUrl) setShowTubeSettings(true)
+          }
+        }}
         favorites={favorites}
         docks={docks}
         onDockAction={handleDockAction}
       />
+      </div>
 
       <div className="app-body">
         <DockGrid
@@ -359,6 +443,11 @@ export default function App() {
           multiAudio={multiAudio}
           enabledDocks={enabledDocks}
           split={gridSplit}
+          tube={tube}
+          onTubeChange={updateTube}
+          onOpenTubeSettings={() => setShowTubeSettings(true)}
+          tubeFraming={tubeFraming}
+          onTubeFramingDone={() => setTubeFraming(false)}
           onSplitChange={setGridSplit}
           muteAll={muteAll}
           nativeMuted={nativeMuted}
@@ -378,6 +467,15 @@ export default function App() {
         />
       </div>
 
+      {showTubeSettings && (
+        <StreamerPanel
+          tube={tube}
+          onChange={updateTube}
+          onStartFraming={() => { setLayout('quad'); setShowTubeSettings(false); setTubeFraming(true) }}
+          onClose={() => setShowTubeSettings(false)}
+        />
+      )}
+
       {viewerUrl && (
         <MediaViewer
           url={viewerUrl}
@@ -390,7 +488,10 @@ export default function App() {
       {showSettings && (
         <SettingsModal
           chatConfig={chatConfig}
-          onSave={(config) => {
+          autoHideToolbar={autoHideToolbar}
+          onSave={({ autoHideToolbar: hide, ...config }) => {
+            setAutoHideToolbar(!!hide)
+            setTbHover(false)
             setChatConfig(prev => {
               // Same chat source (only e.g. the font changed): keep whatever the
               // pane shows now (a Kick/Twitch chat stays), just update settings
