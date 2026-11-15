@@ -71,6 +71,37 @@ function FavoriteEditor({ fav, onSave, onCancel }) {
 }
 
 // Toolbar dropdown: pick a favourite and send it to a dock; edit / remove it
+// Export / import the list as a .json file — to carry favourites over to a
+// new install (an uninstall/reinstall may start with an empty list)
+export function FavoritesFile({ favorites, onDockAction }) {
+  const [msg, setMsg] = useState('')
+  const doExport = async () => {
+    const r = await window.electronAPI?.favoritesExport(favorites)
+    if (r?.ok) setMsg(`Zapisano ${r.count} ulubionych: ${r.path}`)
+    else if (!r?.canceled) setMsg(r?.error || 'Nie udało się zapisać')
+  }
+  const doImport = async () => {
+    const r = await window.electronAPI?.favoritesImport()
+    if (r?.canceled) return
+    if (!r?.ok) { setMsg(r?.error || 'Nie udało się wczytać'); return }
+    const have = new Set(favorites.map(streamKey))
+    const fresh = r.favorites.filter(f => !have.has(streamKey(f)))
+    onDockAction('importFavorites', null, r.favorites)
+    setMsg(r.favorites.length
+      ? `Wczytano ${r.favorites.length}, ${fresh.length ? `dodano ${fresh.length} nowych` : 'wszystkie już były na liście'}.`
+      : 'Plik nie zawiera ulubionych.')
+  }
+  return (
+    <div className="fav-file">
+      <div className="fav-file-btns">
+        <button className="btn" onClick={doExport} disabled={!favorites.length} title="Zapisz listę ulubionych do pliku .json">⇩ Eksportuj do pliku</button>
+        <button className="btn" onClick={doImport} title="Dodaj ulubione z pliku .json (istniejące zostają)">⇧ Importuj z pliku</button>
+      </div>
+      {msg && <div className="fav-file-msg">{msg}</div>}
+    </div>
+  )
+}
+
 export default function FavoritesMenu({ favorites = [], docks = [], onDockAction }) {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(null) // streamKey being edited
@@ -149,6 +180,7 @@ export default function FavoritesMenu({ favorites = [], docks = [], onDockAction
                 </div>
               )
             })}
+            <FavoritesFile favorites={favorites} onDockAction={onDockAction} />
           </div>
         </>
       )}

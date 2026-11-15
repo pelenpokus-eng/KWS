@@ -6,6 +6,7 @@ import SettingsModal from './components/SettingsModal'
 import MediaViewer, { classifyChatUrl } from './components/MediaViewer'
 import { DEFAULT_TUBE } from './components/Tube'
 import StreamerPanel from './components/StreamerPanel'
+import YtLoginPrompt from './components/YtLoginPrompt'
 import { parseStreamUrl, streamKey } from './utils/streamParser'
 import './App.css'
 
@@ -304,6 +305,29 @@ export default function App() {
         break
       }
 
+      case 'importFavorites': {
+        // payload: favourites read from a file — added after the current ones,
+        // links already in the list are skipped. Links are parsed again, so
+        // the embed format of this version is used.
+        if (!Array.isArray(payload)) break
+        setFavorites(prev => {
+          const keys = new Set(prev.map(streamKey))
+          const add = []
+          for (const f of payload) {
+            const fresh = f.originalUrl ? parseStreamUrl(f.originalUrl) : null
+            const fav = fresh
+              ? { embedUrl: fresh.embedUrl, platform: fresh.platform, id: fresh.id, originalUrl: fresh.originalUrl, label: f.label || fresh.label }
+              : { embedUrl: f.embedUrl, platform: f.platform || 'custom', id: f.id || f.embedUrl, originalUrl: f.originalUrl || f.embedUrl, label: f.label || f.embedUrl }
+            const k = streamKey(fav)
+            if (!k || keys.has(k)) continue
+            keys.add(k)
+            add.push(fav)
+          }
+          return add.length ? [...prev, ...add] : prev
+        })
+        break
+      }
+
       case 'updateFavorite': {
         // payload: { oldKey, fav } — edited name and/or link
         const { oldKey, fav } = payload
@@ -507,6 +531,8 @@ export default function App() {
           chatConfig={chatConfig}
           autoHideToolbar={autoHideToolbar}
           extProfile={extProfile}
+          favorites={favorites}
+          onDockAction={handleDockAction}
           onSave={({ autoHideToolbar: hide, extProfile: prof, ...config }) => {
             setAutoHideToolbar(!!hide)
             if (prof) setExtProfile(prof)
@@ -526,6 +552,8 @@ export default function App() {
           onClose={() => setShowSettings(false)}
         />
       )}
+
+      <YtLoginPrompt />
     </div>
   )
 }

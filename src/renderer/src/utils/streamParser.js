@@ -105,6 +105,24 @@ export function parseStreamUrl(rawUrl) {
       }
     }
 
+    // goodzone.live/live/<handle> — the site publishes a plain HLS stream but
+    // has no embed; KWS's own player (main: kwsplayer://, hlsPlayer.js) looks
+    // the stream address up on every load and plays it.
+    if (host === 'goodzone.live') {
+      const parts = parsed.pathname.split('/').filter(Boolean)
+      const handle = parts[0] === 'live' ? parts[1] : (parts.length === 1 ? parts[0] : '')
+      if (handle && /^[A-Za-z0-9_.-]+$/.test(handle)) {
+        return {
+          platform: 'goodzone',
+          type: 'live',
+          id: handle,
+          label: `Goodzone: ${handle}`,
+          originalUrl: `https://goodzone.live/live/${handle}`,
+          embedUrl: `kwsplayer://goodzone/live/${handle}`,
+        }
+      }
+    }
+
     // ShowUp.tv — no embeddable player, so the full room page is loaded in the
     // webview and main process isolates the <video> (see 'focus-video-player')
     if (host === 'showup.tv') {
@@ -142,6 +160,7 @@ export const PLATFORM_META = {
   showup:  { color: '#ff3d7f', emoji: '●', name: 'ShowUp' },
   streamable: { color: '#0f90fa', emoji: '●', name: 'Streamable' },
   strumyk: { color: '#22d3ee', emoji: '●', name: 'Strumyk' },
+  goodzone: { color: '#f59e0b', emoji: '●', name: 'Goodzone' },
   custom:  { color: '#6366f1', emoji: '●', name: 'Custom' },
 }
 

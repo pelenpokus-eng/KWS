@@ -42,6 +42,25 @@ function ytMutedSrc(src) {
   } catch { return src }
 }
 
+// Videos that need the watch page (age-restricted): remembered for the
+// session so a remount (layout switch, swap) goes straight there
+const ytWatchIds = new Set()
+// videos for which the "sign in?" popup was already shown this session
+const ytAskedIds = new Set()
+
+// YouTube sign-in state of KWS (cookies copied from KWS's Chrome profile)
+let ytLoginCache = null
+function useYtLogin() {
+  const [st, setSt] = useState(ytLoginCache)
+  useEffect(() => {
+    let live = true
+    window.electronAPI?.ytLoginStatus?.().then(s => { ytLoginCache = s; if (live) setSt(s) }).catch(() => {})
+    const off = window.electronAPI?.onYtLoginChanged?.((s) => { ytLoginCache = s; setSt(s) })
+    return () => { live = false; off?.() }
+  }, [])
+  return st
+}
+
 function volIcon(v) {
   if (v === 0) return '🔇'
   if (v < 34) return '🔈'
@@ -66,8 +85,35 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
   const [isDragOver, setIsDragOver] = useState(false)
   const isEmpty = !dock.embedUrl
   const isYouTube = dock.platform === 'youtube'
+  // Age-restricted YouTube video: embeds never play it, so the dock loads the
+  // normal watch page (signed in with the account copied into KWS) in a
+  // webview, styled down to the player. Then it's handled like any webview
+  // dock (mute, volume, recording by webContents).
+  const ytLogin = useYtLogin()
+  const [ytWatch, setYtWatch] = useState(() => isYouTube && ytWatchIds.has(dock.id))
+  useEffect(() => { setYtWatch(isYouTube && ytWatchIds.has(dock.id)) }, [dock.embedUrl, isYouTube, dock.id])
+  const ytEmbed = isYouTube && !ytWatch
+  const playUrl = ytWatch ? `https://www.youtube.com/watch?v=${encodeURIComponent(dock.id)}` : dock.embedUrl
+  const startYtWatch = () => { ytWatchIds.add(dock.id); setYtError(null); setYtWatch(true) }
+  // sign-in from the dock's age notice: Chrome window → closed → login copied
+  const [ytLoginOpen, setYtLoginOpen] = useState(false)
+  const [ytLoginMsg, setYtLoginMsg] = useState('')
+  const loginYouTube = async () => {
+    setYtLoginMsg('')
+    const r = await window.electronAPI?.ytLogin()
+    if (r?.ok) setYtLoginOpen(true)
+    else setYtLoginMsg(r?.error || 'Nie udało się otworzyć logowania')
+  }
+  useEffect(() => window.electronAPI?.onYtLoginResult?.((r) => {
+    setYtLoginOpen(false)
+    if (!r?.ok) { setYtLoginMsg(r?.error || 'Logowanie nie powiodło się'); return }
+    setYtLoginMsg('')
+    if (ytWatchIds.has(dock.id)) { setYtError(null); reloadRef.current?.() } // new session: load the watch page again
+  }), [dock.id])
+  const reloadRef = useRef(null)
   const quality = dock.quality || 'auto'
-  const canQuality = dock.platform === 'youtube' || dock.platform === 'twitch'
+  const isHlsPlayer = dock.platform === 'goodzone' // KWS's own player (kwsplayer://)
+  const canQuality = dock.platform === 'youtube' || dock.platform === 'twitch' || isHlsPlayer
   const qualityRef = useRef(quality)
   qualityRef.current = quality
   const [qualityOpen, setQualityOpen] = useState(false)
@@ -173,7 +219,7 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
       if (width > 50 && height > 50) {
         const w = Math.round(width), h = Math.round(height)
         containerSizeRef.current = { w, h }
-        setLiveSrc(dock.embedUrl)
+        setLiveSrc(playUrl)
         // Keep webview guest viewport in sync when container resizes
         const id = wcIdRef.current
         if (id) window.electronAPI?.setWebviewSize(id, w, h)
@@ -181,7 +227,7 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
     })
     if (containerRef.current) obs.observe(containerRef.current)
     return () => obs.disconnect()
-  }, [isEmpty, dock.embedUrl])
+  }, [isEmpty, playUrl])
 
   // ── Recording this dock ──────────────────────────────────────────────
   const [rec, setRec] = useState(null)        // { id, start } while recording
@@ -211,7 +257,7 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
   useEffect(() => () => { if (recRef.current) window.electronAPI?.recStop(recRef.current.id) }, [liveSrc])
   const toggleRecording = async () => {
     if (rec) { window.electronAPI?.recStop(rec.id); return }
-    const target = isYouTube ? { ytId: dock.id } : { wcId: wcIdRef.current }
+    const target = ytEmbed ? { ytId: dock.id } : { wcId: wcIdRef.current }
     const res = await window.electronAPI?.recStart(target, dock.label || meta.name)
     if (res?.ok) { setRec({ id: res.id, start: Date.now() }); setRecNote(null) }
     else setRecNote({ text: res?.error || 'Nie udało się nagrać' })
@@ -224,8 +270,9 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
 
   const reload = useCallback(() => {
     setLiveSrc('')
-    setTimeout(() => setLiveSrc(dock.embedUrl), 50)
-  }, [dock.embedUrl])
+    setTimeout(() => setLiveSrc(playUrl), 50)
+  }, [playUrl])
+  reloadRef.current = reload
 
   // When webview loads a new src, attach dom-ready to get WebContents ID
   useEffect(() => {
@@ -253,6 +300,8 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
         if (isCheckSite) setNeedsCheck(CHECK_TITLE.test(wv.getTitle() || ''))
         if (dock.platform === 'twitch') wv.executeJavaScript(TWITCH_GATE_JS).catch(() => {})
         if (dock.platform === 'twitch' && qualityRef.current !== 'auto') window.electronAPI?.setTwitchQuality(id, qualityRef.current)
+        if (isHlsPlayer) window.electronAPI?.setHlsQuality(id, qualityRef.current)
+        if (ytWatch) window.electronAPI?.ytWatchPrep(id, qualityRef.current)
       } catch {}
     }
 
@@ -274,7 +323,7 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
       if (crashTimes.length > 5) return // give up; user can re-add the stream
       const delay = 1000 * crashTimes.length
       reloadTimer = setTimeout(() => {
-        try { wv.reload() } catch { setLiveSrc(null); setTimeout(() => setLiveSrc(dock.embedUrl), 50) }
+        try { wv.reload() } catch { setLiveSrc(null); setTimeout(() => setLiveSrc(playUrl), 50) }
       }, delay)
       console.warn(`[dock] webview gone (${e?.details?.reason || e?.reason || '?'}), reload in ${delay}ms`)
     }
@@ -316,7 +365,7 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
   useEffect(() => {
     if (!liveSrc) return
     const effectiveMuted = muteAll || !hasAudio
-    if (isYouTube) {
+    if (ytEmbed) {
       window.electronAPI?.setYouTubeAudio(dock.id, effectiveMuted, effectiveMuted ? 0 : volume / 100)
     } else {
       const id = wcIdRef.current
@@ -325,53 +374,85 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
       // <video> exists, and regardless of what the player does with volume
       window.electronAPI?.setWebContentsMuted(id, effectiveMuted || volume === 0)
     }
-  }, [hasAudio, muteAll, liveSrc, isYouTube, dock.id, volume])
+  }, [hasAudio, muteAll, liveSrc, ytEmbed, dock.id, volume])
 
   // Quality: YouTube through main's frame controller; Twitch on change (its
   // load-time apply is in handleReady above)
   const qualityApplied = useRef(null)
   useEffect(() => {
     if (!liveSrc) return
-    if (isYouTube) { window.electronAPI?.setYouTubeQuality(dock.id, quality); return }
+    if (ytEmbed) { window.electronAPI?.setYouTubeQuality(dock.id, quality); return }
+    if (isHlsPlayer) { const id = wcIdRef.current; if (id) window.electronAPI?.setHlsQuality(id, quality); return }
+    if (ytWatch) { const id = wcIdRef.current; if (id) window.electronAPI?.ytWatchPrep(id, quality); return }
     if (dock.platform === 'twitch') {
       const id = wcIdRef.current
       if (id && qualityApplied.current !== null && qualityApplied.current !== quality) window.electronAPI?.setTwitchQuality(id, quality)
       qualityApplied.current = quality
     }
-  }, [quality, liveSrc, isYouTube, dock.id, dock.platform])
+  }, [quality, liveSrc, ytEmbed, dock.id, dock.platform])
 
-  // YouTube: check whether the embed can play it; poll — the message comes
-  // a moment after load, and a retry may fix a temporary error
+  // YouTube: check whether the embed (or the watch page) can play it; poll —
+  // the message comes a moment after load, and a retry may fix a temporary
+  // error. An age-restricted video with KWS signed in goes to the watch page.
+  const ytLoggedIn = !!ytLogin?.loggedIn
+  const ytLoggedInRef = useRef(ytLoggedIn)
+  ytLoggedInRef.current = ytLoggedIn
   useEffect(() => {
     setYtError(null)
     if (!isYouTube || !liveSrc) return
     let stop = false, timer = null
+    let watchInfo // undefined until the watch page was checked (once per load)
     const check = async () => {
       if (stop) return
       let st = null
-      try { st = await window.electronAPI?.ytStatus(dock.id) } catch {}
+      try {
+        st = ytWatch
+          ? (wcIdRef.current ? await window.electronAPI?.ytWatchStatus(wcIdRef.current) : null)
+          : await window.electronAPI?.ytStatus(dock.id)
+      } catch {}
       if (stop) return
+      // watch page: the "controversial content" screen is confirmed by main's
+      // page script — just check again shortly
+      if (ytWatch && st && st.status === 'CONTENT_CHECK_REQUIRED') { timer = setTimeout(check, 2000); return }
       if (st && st.ok === false) {
-        const age = /wiek|age|18|confirm your|potwierd/i.test(st.text || '') || /AGE|LOGIN_REQUIRED/.test(st.status || '')
-        setYtError({ text: st.text, age })
+        let age = /wiek|age|18|confirm your|potwierd/i.test(st.text || '') || /AGE|LOGIN_REQUIRED/.test(st.status || '')
+        if (!ytWatch) {
+          // the embed's message varies; the watch page says reliably what's up
+          if (watchInfo === undefined) {
+            try { watchInfo = await window.electronAPI?.ytCheckWatch(dock.id) } catch { watchInfo = null }
+            if (stop) return
+          }
+          if (watchInfo?.playable) { startYtWatch(); return } // only embedding is off
+          if (watchInfo?.age) age = true
+          if (age && ytLoggedInRef.current) { startYtWatch(); return }
+        }
+        if (age && !ytLoggedInRef.current && !ytAskedIds.has(dock.id)) {
+          ytAskedIds.add(dock.id)
+          window.dispatchEvent(new CustomEvent('kws-yt-ask-login', { detail: { label: dock.label, platform: dock.platform, id: dock.id } }))
+        }
+        setYtError({ text: st.text, age, watch: ytWatch })
       } else if (st && st.ok) setYtError(null)
       timer = setTimeout(check, st && st.ok && !st.unknown ? 15000 : 3000)
     }
-    timer = setTimeout(check, 2500)
+    timer = setTimeout(check, ytWatch ? 5000 : 2500)
     return () => { stop = true; clearTimeout(timer) }
-  }, [isYouTube, liveSrc, dock.id])
+  }, [isYouTube, liveSrc, dock.id, ytWatch])
+  // signed in while the dock shows the age notice: go to the watch page
+  useEffect(() => {
+    if (ytLoggedIn && ytError?.age && !ytWatch) startYtWatch()
+  }, [ytLoggedIn, ytError?.age, ytWatch])
 
   // Volume — YouTube uses frame injection; others use webview injection
   useEffect(() => {
     if (!liveSrc || !hasAudio || muteAll) return
-    if (isYouTube) {
+    if (ytEmbed) {
       window.electronAPI?.setYouTubeAudio(dock.id, false, volume / 100)
     } else {
       const id = wcIdRef.current
       if (!id) return
       window.electronAPI?.setWebContentsVolume(id, volume / 100)
     }
-  }, [volume, liveSrc, isYouTube, dock.id, hasAudio, muteAll])
+  }, [volume, liveSrc, ytEmbed, dock.id, hasAudio, muteAll])
 
 
   if (isEmpty) {
@@ -415,7 +496,7 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {liveSrc && isYouTube && !ext && (
+      {liveSrc && ytEmbed && !ext && (
         <iframe
           key={liveSrc}
           src={ytMutedSrc(liveSrc)}
@@ -424,7 +505,7 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
           style={{ position: 'absolute', inset: 0, border: 'none', width: '100%', height: '100%', pointerEvents: 'none' }}
         />
       )}
-      {liveSrc && !isYouTube && !ext && (
+      {liveSrc && !ytEmbed && !ext && (
         <webview
           key={liveSrc}
           ref={webviewRef}
@@ -450,13 +531,25 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
         <div className="dock-check">
           <div className="dock-check-title">{ytError.age ? 'Film z ograniczeniem wiekowym' : 'YouTube nie odtworzy tego filmu tutaj'}</div>
           <div className="dock-check-text">
-            {ytError.age
-              ? 'YouTube nie pozwala odtwarzać filmów 18+ w osadzonych playerach (takich jak docki). Obejrzysz go w przeglądarce, w której jesteś zalogowany na konto z potwierdzonym wiekiem.'
-              : (ytError.text || 'Film jest niedostępny w osadzonym playerze.')}
+            {!ytError.age
+              ? (ytError.text || 'Film jest niedostępny w osadzonym playerze.')
+              : ytError.watch
+                ? 'YouTube nie przyjął logowania KWS (sesja wygasła albo konto nie ma potwierdzonego wieku). Zaloguj się jeszcze raz.'
+                : ytLoggedIn
+                  ? 'KWS jest zalogowany do YouTube — odtwórz film przez konto.'
+                  : 'Filmy 18+ grają tylko po zalogowaniu na konto z potwierdzonym wiekiem. Zaloguj się raz — otworzy się okno Chrome; po zalogowaniu je zamknij, a film ruszy w tym docku.'}
           </div>
           {ytError.age && ytError.text && <div className="dock-check-text" style={{ opacity: 0.7 }}>YouTube: {ytError.text}</div>}
+          {ytLoginMsg && <div className="dock-check-text" style={{ color: '#fca5a5' }}>{ytLoginMsg}</div>}
           <div className="dock-check-actions">
-            <button className="btn active" onClick={() => openExternal(`https://www.youtube.com/watch?v=${dock.id}`)} title="Twój Chrome (profil z zalogowanym kontem) jako okno przyklejone do tego docka">⧉ Otwórz w Chrome w docku</button>
+            {ytError.age && (!ytLoggedIn || ytError.watch) && (
+              <button className="btn active" onClick={loginYouTube} disabled={ytLoginOpen}>
+                {ytLoginOpen ? 'Czekam na zamknięcie okna logowania…' : 'Zaloguj do YouTube'}
+              </button>
+            )}
+            {ytError.age && ytLoggedIn && !ytError.watch && (
+              <button className="btn active" onClick={startYtWatch}>▶ Odtwórz z kontem</button>
+            )}
             <button className="btn" onClick={() => window.electronAPI?.openExternal(`https://www.youtube.com/watch?v=${dock.id}`)}>↗ W przeglądarce</button>
             <button className="btn" onClick={() => { setYtError(null); reload() }}>↻ Spróbuj ponownie</button>
           </div>

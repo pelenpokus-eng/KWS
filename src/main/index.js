@@ -1,11 +1,12 @@
-import { app, BrowserWindow, ipcMain, dialog, protocol, webContents, webFrameMain, net, shell, Menu, clipboard, screen } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, protocol, session, webContents, webFrameMain, net, shell, Menu, clipboard, screen } from 'electron'
 import { join } from 'path'
 import Store from 'electron-store'
-import { writeFileSync, readFile, readFileSync, mkdirSync, createWriteStream, readdirSync, statSync } from 'fs'
+import { writeFileSync, readFile, readFileSync, mkdirSync, createWriteStream, readdirSync, statSync, rmSync } from 'fs'
 import { createServer } from 'http'
 import { normalize, extname, sep } from 'path'
 import appIcon from '../../resources/icon.png?asset'
 import winHelperScript from './winhelper.ps1?raw'
+import { playerSchemePrivileges, registerPlayerProtocol } from './hlsPlayer'
 import { spawn } from 'child_process'
 
 // Enable autoplay without user gesture
@@ -22,10 +23,16 @@ protocol.registerSchemesAsPrivileged([
       bypassCSP: true,
       allowServiceWorkers: false,
     }
-  }
+  },
+  playerSchemePrivileges,
 ])
 
+// Tests: run with a separate data folder (settings, cookies, Chrome profile)
+// so a test copy never touches the user's own KWS data
+if (process.env.KWS_USER_DATA) app.setPath('userData', process.env.KWS_USER_DATA)
+
 const store = new Store()
+let storeLocked = false // set while the whole app is being reset
 
 // Production renderer is served over http://localhost (not file://), exactly
 // like the dev server. YouTube embeds refuse to play without an HTTP Referer
@@ -142,10 +149,52 @@ app.whenReady().then(() => {
     })
   })
 
+  // kwsplayer:// — own HLS player (goodzone.live)
+  registerPlayerProtocol()
+
   const mainWindow = createWindow()
 
   ipcMain.handle('store:get', (_, key) => store.get(key))
-  ipcMain.handle('store:set', (_, key, value) => store.set(key, value))
+  ipcMain.handle('store:set', (_, key, value) => { if (!storeLocked) store.set(key, value) })
+
+  // ── Favourites to / from a file (carry them over to another install) ────
+  const FAV_FIELDS = ['platform', 'type', 'id', 'label', 'originalUrl', 'embedUrl']
+  const cleanFav = (f) => {
+    if (!f || typeof f !== 'object') return null
+    const o = {}
+    for (const k of FAV_FIELDS) if (typeof f[k] === 'string' && f[k].length < 2000) o[k] = f[k]
+    return o.originalUrl || o.embedUrl ? o : null
+  }
+  ipcMain.handle('favorites-export', async (_, list) => {
+    const favs = (Array.isArray(list) ? list : []).map(cleanFav).filter(Boolean)
+    const d = new Date(), p = (n) => String(n).padStart(2, '0')
+    const { filePath, canceled } = await dialog.showSaveDialog(mainWindow, {
+      title: 'Eksportuj ulubione',
+      defaultPath: join(app.getPath('documents'), `KWS ulubione ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}.json`),
+      filters: [{ name: 'Ulubione KWS (JSON)', extensions: ['json'] }],
+    })
+    if (canceled || !filePath) return { ok: false, canceled: true }
+    try {
+      writeFileSync(filePath, JSON.stringify({ app: 'KWS MultiStream', kind: 'favorites', version: 1, exportedAt: d.toISOString(), favorites: favs }, null, 2), 'utf8')
+      return { ok: true, path: filePath, count: favs.length }
+    } catch (e) { return { ok: false, error: e.message } }
+  })
+  ipcMain.handle('favorites-import', async () => {
+    const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
+      title: 'Importuj ulubione',
+      defaultPath: app.getPath('documents'),
+      filters: [{ name: 'Ulubione KWS (JSON)', extensions: ['json'] }],
+      properties: ['openFile'],
+    })
+    if (canceled || !filePaths?.[0]) return { ok: false, canceled: true }
+    try {
+      const data = JSON.parse(readFileSync(filePaths[0], 'utf8').replace(/^﻿/, ''))
+      const raw = Array.isArray(data) ? data : data?.favorites
+      if (!Array.isArray(raw)) return { ok: false, error: 'To nie jest plik ulubionych KWS' }
+      const favs = raw.map(cleanFav).filter(Boolean)
+      return { ok: true, favorites: favs }
+    } catch { return { ok: false, error: 'Nie udało się odczytać pliku (zły format)' } }
+  })
 
   ipcMain.handle('save-screenshot', async (_, dataUrl, label) => {
     const name = (label || 'stream').replace(/[^a-zA-Z0-9_-]/g, '_')
@@ -446,6 +495,15 @@ app.whenReady().then(() => {
     } catch { return 'error' }
   })
 
+  // KWS's own HLS player (kwsplayer://): it exposes window.__kwsQuality
+  ipcMain.handle('set-hls-quality', async (_, id, q) => {
+    try {
+      const wc = webContents.fromId(Number(id))
+      if (!wc || wc.isDestroyed()) return
+      await wc.executeJavaScript(`window.__kwsQuality && window.__kwsQuality(${JSON.stringify(String(q || 'auto'))})`)
+    } catch {}
+  })
+
   ipcMain.handle('set-webcontents-muted', (_, id, muted) => {
     try {
       const wc = webContents.fromId(Number(id))
@@ -651,6 +709,56 @@ app.whenReady().then(() => {
       body: JSON.stringify({ query, variables }),
     })
   }
+
+  // ── Title for a pasted link (the add dialog's suggested name) ──────────
+  const decodeEntities = (s) => String(s || '')
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+  // og:title, else <title> — from a page fetched without KWS's login
+  async function pageTitle(url) {
+    try {
+      const anon = session.fromPartition('kws-yt-anon')
+      const res = await anon.fetch(url, {
+        headers: { 'User-Agent': BROWSER_UA, 'Accept-Language': 'pl,en;q=0.8', Cookie: 'SOCS=CAI; CONSENT=YES+' },
+        signal: AbortSignal.timeout(8000),
+      })
+      if (!res.ok) return ''
+      const html = (await res.text()).slice(0, 400000)
+      const og = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)/i) || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
+      const t = og ? og[1] : (html.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1]
+      return decodeEntities(t).replace(/\s+/g, ' ').trim()
+    } catch { return '' }
+  }
+  ipcMain.handle('stream-title', async (_, s) => {
+    const p = s?.platform, id = String(s?.id || '')
+    try {
+      if (p === 'youtube') {
+        const o = await fetchJson(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent('https://www.youtube.com/watch?v=' + id)}`)
+        if (o?.title) return o.title
+        return (await pageTitle(`https://www.youtube.com/watch?v=${encodeURIComponent(id)}`)).replace(/\s*-\s*YouTube$/, '')
+      }
+      if (p === 'streamable') {
+        const o = await fetchJson(`https://api.streamable.com/oembed.json?url=${encodeURIComponent('https://streamable.com/' + id)}`)
+        return o?.title || ''
+      }
+      if (p === 'twitch') {
+        if (s.type === 'clip') {
+          const r = await twitchGql('query($s: ID!) { clip(slug: $s) { title broadcaster { displayName } } }', { s: id })
+          const c = r?.data?.clip
+          return c?.title ? (c.broadcaster?.displayName ? `${c.broadcaster.displayName}: ${c.title}` : c.title) : ''
+        }
+        const r = await twitchGql('query($l: String!) { user(login: $l) { displayName } }', { l: id })
+        return r?.data?.user?.displayName || ''
+      }
+      if (p === 'kick') {
+        const o = await fetchJson(`https://kick.com/api/v2/channels/${encodeURIComponent(id)}`, { headers: { 'User-Agent': BROWSER_UA, Accept: 'application/json' } })
+        return o?.user?.username || ''
+      }
+      if (p === 'custom' && /^https?:\/\//.test(s.originalUrl || '')) return await pageTitle(s.originalUrl)
+    } catch {}
+    return ''
+  })
 
   const TWITCH_USER_FIELDS = 'login displayName profileImageURL(width: 70) stream { viewersCount game { displayName } }'
 
@@ -1350,6 +1458,212 @@ app.whenReady().then(() => {
     if (!e) return
     extWins.delete(dockIndex)
     return hcmd('CLOSE ' + e.hwnd)
+  })
+
+  // ── YouTube account in KWS (age-restricted videos) ──────────────────────
+  // Google refuses sign-in inside Electron, and embeds never play 18+ videos.
+  // So: the user signs in once in KWS's Chrome profile (real Chrome), KWS
+  // copies the youtube.com / google.com cookies from it into its own session
+  // (headless Chrome on that profile, CDP Storage.getCookies), and a dock with
+  // an 18+ video loads the normal watch page, styled down to the player.
+  const YT_COOKIE_DOMAIN = /(^|\.)(youtube|google)\.com$/
+  const ytCookiesIn = async () => (await session.defaultSession.cookies.get({}))
+    .filter(c => YT_COOKIE_DOMAIN.test((c.domain || '').replace(/^\./, '')))
+  const ytLoginStatus = async () => {
+    const ck = await ytCookiesIn()
+    return { loggedIn: ck.some(c => /youtube\.com$/.test(c.domain) && (c.name === 'LOGIN_INFO' || c.name === 'SAPISID')) }
+  }
+  const sendYtLogin = async () => { if (!mainWindow.isDestroyed()) mainWindow.webContents.send('yt-login-changed', await ytLoginStatus()) }
+  // Chrome keeps <profile>\lockfile open while the profile runs
+  const profileInUse = () => {
+    const f = join(extProfileDir(), 'lockfile')
+    try { statSync(f) } catch { return false }
+    try { rmSync(f); return false } catch { return true }
+  }
+  const cdpCall = (wsUrl, method, params = {}) => new Promise((resolve) => {
+    let ws
+    const done = (v) => { try { ws.close() } catch {} resolve(v) }
+    try { ws = new WebSocket(wsUrl) } catch { resolve(null); return }
+    const t = setTimeout(() => done(null), 8000)
+    ws.onopen = () => ws.send(JSON.stringify({ id: 1, method, params }))
+    ws.onmessage = (ev) => { try { const m = JSON.parse(ev.data); if (m.id === 1) { clearTimeout(t); done(m.result || null) } } catch {} }
+    ws.onerror = () => { clearTimeout(t); done(null) }
+  })
+  // cookies of KWS's Chrome profile — through its running instance (when it
+  // runs with remote control, e.g. a Chrome-in-dock window) or a headless one
+  async function profileCookies(clear = false) {
+    let port = await portFromProfile()
+    let child = null
+    if (!port) {
+      if (profileInUse()) return { error: 'Zamknij okno Chrome z profilem KWS i spróbuj ponownie.' }
+      const browser = findBrowser()
+      if (!browser) return { error: 'Nie znaleziono Chrome ani Edge' }
+      try { rmSync(join(extProfileDir(), 'DevToolsActivePort')) } catch {}
+      child = spawn(browser.path, ['--headless=new', '--user-data-dir=' + extProfileDir(), '--remote-debugging-port=0',
+        '--no-first-run', '--no-default-browser-check', 'about:blank'], { stdio: 'ignore', windowsHide: true })
+      for (let i = 0; i < 60 && !port; i++) { await new Promise(r => setTimeout(r, 250)); port = await portFromProfile() }
+    }
+    try {
+      if (!port) return { error: 'Chrome nie odpowiada' }
+      const v = await (await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(3000) })).json()
+      const r = await cdpCall(v.webSocketDebuggerUrl, 'Storage.getCookies')
+      // log out: wipe the profile's cookies (the profile is KWS-only)
+      if (clear && r) await cdpCall(v.webSocketDebuggerUrl, 'Storage.clearCookies')
+      if (!r) return { error: 'Nie udało się odczytać logowania z Chrome' }
+      if (child) await cdpCall(v.webSocketDebuggerUrl, 'Browser.close')
+      return { cookies: (r.cookies || []).filter(c => YT_COOKIE_DOMAIN.test(c.domain.replace(/^\./, ''))) }
+    } finally {
+      if (child) { setTimeout(() => { try { child.kill() } catch {} }, 1500); extPort = 0 }
+    }
+  }
+  async function importYtLogin() {
+    const r = await profileCookies()
+    if (r.error) return { ok: false, error: r.error }
+    const auth = r.cookies.filter(c => /youtube\.com$/.test(c.domain) && (c.name === 'LOGIN_INFO' || c.name === 'SAPISID'))
+    if (!auth.length) return { ok: false, error: 'W profilu KWS nie jesteś zalogowany do YouTube.' }
+    // replace KWS's YouTube/Google cookies with the profile's
+    for (const c of await ytCookiesIn()) {
+      const host = c.domain.replace(/^\./, '')
+      try { await session.defaultSession.cookies.remove(`https://${host}${c.path || '/'}`, c.name) } catch {}
+    }
+    let n = 0
+    for (const c of r.cookies) {
+      const host = c.domain.replace(/^\./, '')
+      try {
+        await session.defaultSession.cookies.set({
+          url: `https://${host}${c.path || '/'}`, name: c.name, value: c.value,
+          domain: c.domain.startsWith('.') ? c.domain : undefined, path: c.path,
+          secure: c.secure, httpOnly: c.httpOnly,
+          sameSite: c.sameSite === 'None' ? 'no_restriction' : c.sameSite ? c.sameSite.toLowerCase() : 'unspecified',
+          expirationDate: c.expires > 0 ? c.expires : undefined,
+        })
+        n++
+      } catch {}
+    }
+    await session.defaultSession.cookies.flushStore().catch(() => {})
+    return { ok: n > 0, count: n }
+  }
+  ipcMain.handle('yt-login-status', () => ytLoginStatus())
+  // Settings / dock: open the sign-in window; when the user closes it, take
+  // the login over into KWS
+  let ytLoginBusy = false
+  ipcMain.handle('yt-login', async () => {
+    if (ytLoginBusy) return { ok: false, error: 'Okno logowania jest już otwarte' }
+    const browser = findBrowser()
+    if (!browser) return { ok: false, error: 'Nie znaleziono Chrome ani Edge' }
+    // a profile running with remote control (Chrome-in-dock): Google refuses
+    // sign-in there — close it first
+    for (const [k, e] of extWins) { if (e.cdp) { hcmd('CLOSE ' + e.hwnd); extWins.delete(k); if (!mainWindow.isDestroyed()) mainWindow.webContents.send('ext-closed', k) } }
+    await stopKwsProfile()
+    if (profileInUse()) return { ok: false, error: 'Okno Chrome z profilem KWS jest już otwarte — zaloguj się w nim i je zamknij.' }
+    ytLoginBusy = true
+    const child = spawn(browser.path, ['--user-data-dir=' + extProfileDir(), '--no-first-run', '--no-default-browser-check',
+      'https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F'], { stdio: 'ignore' })
+    child.on('exit', async () => {
+      // give Chrome a moment to write its cookie database
+      for (let i = 0; i < 20 && profileInUse(); i++) await new Promise(r => setTimeout(r, 500))
+      const r = await importYtLogin()
+      ytLoginBusy = false
+      if (!mainWindow.isDestroyed()) mainWindow.webContents.send('yt-login-result', r)
+      sendYtLogin()
+    })
+    return { ok: true, browser: browser.name }
+  })
+  ipcMain.handle('yt-login-import', async () => { const r = await importYtLogin(); sendYtLogin(); return r })
+  ipcMain.handle('yt-logout', async () => {
+    for (const c of await ytCookiesIn()) {
+      const host = c.domain.replace(/^\./, '')
+      try { await session.defaultSession.cookies.remove(`https://${host}${c.path || '/'}`, c.name) } catch {}
+    }
+    await session.defaultSession.cookies.flushStore().catch(() => {})
+    sendYtLogin()
+    // also sign out KWS's Chrome profile — otherwise the next sign-in window
+    // would open already signed in and silently bring the login back
+    for (const [k, e] of extWins) { if (e.cdp) { hcmd('CLOSE ' + e.hwnd); extWins.delete(k); if (!mainWindow.isDestroyed()) mainWindow.webContents.send('ext-closed', k) } }
+    const r = await profileCookies(true)
+    return r.error ? { ok: true, warning: `KWS wylogowany, ale profil Chrome nie: ${r.error}` } : { ok: true }
+  })
+
+  // ── Clear app data (Settings) ───────────────────────────────────────────
+  // 'web': logins, cookies, site storage, cache + KWS's Chrome profile —
+  //        docks, favourites, history and settings stay.
+  // 'all': also the app's own state (config.json) — like a fresh install.
+  // Recordings (Videos folder) are never touched. KWS restarts afterwards.
+  ipcMain.handle('clear-app-data', async (_, mode) => {
+    const all = mode === 'all'
+    if (all) storeLocked = true // no state writes from the page from now on
+    for (const e of extWins.values()) hcmd('CLOSE ' + e.hwnd)
+    extWins.clear()
+    await stopKwsProfile().catch(() => {})
+    const ses = session.defaultSession
+    await ses.clearStorageData().catch(() => {})
+    await ses.clearCache().catch(() => {})
+    await ses.clearAuthCache().catch(() => {})
+    await ses.cookies.flushStore().catch(() => {})
+    try { rmSync(extProfileDir(), { recursive: true, force: true }) } catch {}
+    if (all) store.clear()
+    setTimeout(() => { app.relaunch(); app.exit(0) }, 300)
+    return { ok: true }
+  })
+
+  // the watch page in a dock: only the player, filling the dock; no autoplay
+  // of the next video; dialogs (consent, promos) hidden
+  const YT_WATCH_JS = `(function(){
+    var css = 'html,body{overflow:hidden!important;background:#000!important}' +
+      'ytd-masthead,#masthead-container,#secondary,#below,#chat-container,tp-yt-app-drawer,ytd-popup-container,tp-yt-iron-overlay-backdrop,ytd-mealbar-promo-renderer{display:none!important}' +
+      '#movie_player{position:fixed!important;left:0!important;top:0!important;width:100vw!important;height:100vh!important;z-index:2147483646!important;background:#000!important}' +
+      '#movie_player .html5-video-container,#movie_player video{width:100%!important;height:100%!important;left:0!important;top:0!important;object-fit:contain!important}' +
+      '.ytp-chrome-top,.ytp-pause-overlay,.ytp-endscreen-content,.ytp-ce-element,#cinematics,#cinematics-container{display:none!important}';
+    function fill() {
+      var st = document.getElementById('kws-fill');
+      if (!st) { st = document.createElement('style'); st.id = 'kws-fill'; (document.head || document.documentElement).appendChild(st); }
+      if (st.textContent !== css) { st.textContent = css; window.dispatchEvent(new Event('resize')); }
+      var an = document.querySelector('.ytp-autonav-toggle-button[aria-checked="true"]');
+      if (an && !an.__kws) { an.__kws = true; an.click(); }
+      // "potentially controversial content" screen (CONTENT_CHECK_REQUIRED):
+      // the user picked this video, so confirm "I understand and wish to proceed"
+      var ok = document.querySelector('.interstitialViewModelButtonContainer .ytSpecButtonShapeNextFilled, .interstitialViewModelButtonContainer button-view-model:first-child a, .interstitialViewModelButtonContainer button-view-model:first-child button');
+      if (ok && !ok.__kws) { ok.__kws = true; ok.click(); }
+    }
+    fill();
+    if (!window.__kwsFillT) window.__kwsFillT = setInterval(fill, 1500);
+    return 1;
+  })()`
+  ipcMain.handle('yt-watch-prep', async (_, id, q) => {
+    try {
+      const wc = webContents.fromId(Number(id))
+      if (!wc || wc.isDestroyed()) return
+      await wc.executeJavaScript(YT_WATCH_JS)
+      await wc.executeJavaScript(ytQualityScript(String(q || 'auto')))
+    } catch {}
+  })
+  // The embed failed: what does the normal watch page say about the video?
+  // Fetched without any login (a throwaway session), in English, past the EU
+  // consent page (SOCS). Tells apart "age-restricted → sign in", "only
+  // embedding is off → the watch page plays it" and "gone / private".
+  ipcMain.handle('yt-check-watch', async (_, videoId) => {
+    const id = String(videoId || '')
+    if (!/^[A-Za-z0-9_-]{6,20}$/.test(id)) return null
+    try {
+      const anon = session.fromPartition('kws-yt-anon')
+      const res = await anon.fetch(`https://www.youtube.com/watch?v=${id}&hl=en`, {
+        headers: { 'Accept-Language': 'en-US,en;q=0.8', Cookie: 'SOCS=CAI; CONSENT=YES+' },
+        signal: AbortSignal.timeout(10000),
+      })
+      const html = await res.text()
+      const m = html.match(/"playabilityStatus":\{"status":"([A-Z_]+)"(?:,"reason":"((?:[^"\\]|\\.){0,200})")?/)
+      if (!m) return { status: 'UNKNOWN' }
+      const status = m[1], reason = (m[2] || '').replace(/\\u0026/g, '&')
+      const age = /AGE_/.test(status) || /confirm your age|age-restricted|inappropriate for some users/i.test(reason)
+      return { status, reason, age, playable: status === 'OK' }
+    } catch { return null }
+  })
+  ipcMain.handle('yt-watch-status', async (_, id) => {
+    try {
+      const wc = webContents.fromId(Number(id))
+      if (!wc || wc.isDestroyed()) return null
+      return await wc.executeJavaScript(YT_STATUS_JS)
+    } catch { return null }
   })
 
   // ── Kick / Twitch chat font size (Settings) ─────────────────────────────

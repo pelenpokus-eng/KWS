@@ -61,6 +61,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('ext-closed', h)
   },
   setTwitchQuality: (id, q) => ipcRenderer.invoke('set-twitch-quality', id, q),
+  setHlsQuality: (id, q) => ipcRenderer.invoke('set-hls-quality', id, q),
+  // YouTube account in KWS (age-restricted videos)
+  ytLoginStatus: () => ipcRenderer.invoke('yt-login-status'),
+  ytLogin: () => ipcRenderer.invoke('yt-login'),
+  ytLoginImport: () => ipcRenderer.invoke('yt-login-import'),
+  ytLogout: () => ipcRenderer.invoke('yt-logout'),
+  ytWatchPrep: (id, q) => ipcRenderer.invoke('yt-watch-prep', id, q),
+  ytWatchStatus: (id) => ipcRenderer.invoke('yt-watch-status', id),
+  ytCheckWatch: (videoId) => ipcRenderer.invoke('yt-check-watch', videoId),
+  streamTitle: (stream) => ipcRenderer.invoke('stream-title', stream),
+  favoritesExport: (list) => ipcRenderer.invoke('favorites-export', list),
+  favoritesImport: () => ipcRenderer.invoke('favorites-import'),
+  clearAppData: (mode) => ipcRenderer.invoke('clear-app-data', mode),
+  onYtLoginChanged: (cb) => {
+    const h = (_, st) => cb(st)
+    ipcRenderer.on('yt-login-changed', h)
+    return () => ipcRenderer.removeListener('yt-login-changed', h)
+  },
+  onYtLoginResult: (cb) => {
+    const h = (_, r) => cb(r)
+    ipcRenderer.on('yt-login-result', h)
+    return () => ipcRenderer.removeListener('yt-login-result', h)
+  },
   chatangoCompact: (id, fontPct) => ipcRenderer.invoke('chatango-compact', id, fontPct),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   setChatFont: (id, pct) => ipcRenderer.invoke('set-chat-font', id, pct),

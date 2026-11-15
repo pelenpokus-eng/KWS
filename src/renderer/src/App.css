@@ -282,7 +282,11 @@ body {
   flex: 1;
   display: grid;
   gap: 2px;
-  background: #050505;
+  /* Even dot grid in a muted lavender on dark slate, so empty space isn't
+     flat black — one dot size, one colour, regular spacing */
+  background:
+    radial-gradient(circle at center, rgba(167, 139, 250, 0.38) 0 2.5px, transparent 3.1px) center / 30px 30px,
+    #1c1b24;
   min-width: 0;
   overflow: hidden;
   height: calc(100vh - var(--tb-h));
@@ -337,8 +341,8 @@ body.is-dragging iframe {
   flex-direction: column;
   gap: 10px;
   cursor: pointer;
-  border: 2px dashed #34343b;
-  background: var(--bg-0);
+  border: 2px dashed #3a3a44;
+  background: rgba(10, 10, 14, 0.28); /* the grid's dots show through */
   transition: all 0.15s;
 }
 .stream-dock.empty-dock:hover {
@@ -1600,3 +1604,19 @@ body.is-dragging iframe {
 .dock-ext-bar { z-index: 12; }
 .dock-ext-btn.on { color: #fff; background: #7c3aed; border-color: #7c3aed; }
 .dock-ext-vol { width: 90px; accent-color: #8b5cf6; }
+
+/* ── "Sign in to YouTube?" popup (age-restricted video in a dock) ── */
+.yt-login-text { font-size: 13px; line-height: 1.55; color: var(--text-2); margin-bottom: 16px; }
+.yt-login-video {
+  font-size: 12px; color: var(--text-1); background: var(--bg-3);
+  border-radius: var(--radius-sm); padding: 6px 10px; margin-bottom: 10px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ── Favourites: export / import (bottom of the list) ── */
+.fav-file { border-top: 1px solid var(--border); margin-top: 6px; padding: 8px 6px 2px; }
+.fav-file-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.fav-file-btns .btn { font-size: 12px; }
+.fav-file-msg { font-size: 11px; color: var(--text-3); margin-top: 6px; line-height: 1.4; word-break: break-all; }
+/* armed "clear app data" button in Settings */
+.modal .btn.danger { color: #fca5a5; border-color: var(--danger); }

@@ -25,6 +25,9 @@ export default function AddStreamModal({ dockIndex, streamHistory = [], favorite
   const [activeIdx, setActiveIdx] = useState(0)
   const inputRef = useRef(null)
   const searchSeq = useRef(0)
+  const titleSeq = useRef(0)
+  const autoLabel = useRef('') // the name KWS suggested (vs. one the user typed)
+  const [fetchingTitle, setFetchingTitle] = useState(false)
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -68,13 +71,34 @@ export default function AddStreamModal({ dockIndex, streamHistory = [], favorite
     setUrl(val)
     setError('')
     const v = val.trim()
+    const seq = ++titleSeq.current
     if (v && looksLikeUrl(v)) {
       const parsed = parseStreamUrl(v)
       setPreview(parsed || null)
-      if (parsed && !label) setLabel(parsed.label)
+      // suggested name: the link's own label at once, then the real title
+      // (video title / channel name) once main has fetched it — only while
+      // the user hasn't typed a name of their own
+      const isAuto = !label || label === autoLabel.current
+      if (parsed && isAuto) {
+        setAutoName(parsed.label)
+        setFetchingTitle(true)
+        window.electronAPI?.streamTitle?.({ platform: parsed.platform, type: parsed.type, id: parsed.id, originalUrl: parsed.originalUrl })
+          .then(t => { if (seq === titleSeq.current && t) setAutoName(t) })
+          .catch(() => {})
+          .finally(() => { if (seq === titleSeq.current) setFetchingTitle(false) })
+      }
     } else {
       setPreview(null)
+      setFetchingTitle(false)
+      if (label === autoLabel.current) setAutoName('')
     }
+  }
+  function setAutoName(t) {
+    setLabel(prev => {
+      if (prev && prev !== autoLabel.current) return prev // the user typed their own
+      autoLabel.current = t
+      return t
+    })
   }
 
   function addChannel(platform, login, displayName) {
@@ -215,7 +239,7 @@ export default function AddStreamModal({ dockIndex, streamHistory = [], favorite
           ref={inputRef}
           className="modal-input"
           type="text"
-          placeholder="np. raszei  —  lub https://twitch.tv/kanal, kick.com/kanal, showup.tv/kanal, strumyk.cv/#id ..."
+          placeholder="np. raszei  —  lub https://twitch.tv/kanal, kick.com/kanal, showup.tv/kanal, goodzone.live/live/kanal ..."
           value={url}
           onChange={handleUrlChange}
           onKeyDown={handleSearchKey}
@@ -269,7 +293,7 @@ export default function AddStreamModal({ dockIndex, streamHistory = [], favorite
 
         {error && <div className="modal-error">{error}</div>}
 
-        <div className="modal-label">Etykieta (opcjonalnie)</div>
+        <div className="modal-label">Etykieta (opcjonalnie){fetchingTitle && <span style={{ textTransform: 'none', fontWeight: 400, color: 'var(--text-3)' }}> — pobieram tytuł…</span>}</div>
         <input
           className="modal-input"
           type="text"
