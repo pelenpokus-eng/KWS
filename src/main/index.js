@@ -1,10 +1,12 @@
-import { app, BrowserWindow, ipcMain, dialog, protocol, webContents, webFrameMain, net, shell, Menu, clipboard } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, protocol, webContents, webFrameMain, net, shell, Menu, clipboard, screen } from 'electron'
 import { join } from 'path'
 import Store from 'electron-store'
-import { writeFileSync, readFile } from 'fs'
+import { writeFileSync, readFile, readFileSync, mkdirSync, createWriteStream, readdirSync, statSync } from 'fs'
 import { createServer } from 'http'
 import { normalize, extname, sep } from 'path'
 import appIcon from '../../resources/icon.png?asset'
+import winHelperScript from './winhelper.ps1?raw'
+import { spawn } from 'child_process'
 
 // Enable autoplay without user gesture
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
@@ -305,6 +307,75 @@ app.whenReady().then(() => {
     } catch { return null }
   }
 
+  // ── YouTube quality (dock setting) ──
+  const ytQualityState = new Map() // videoId -> 'auto' | 'max' | '1080' | '720' | '480' | '360'
+  const ytQualityScript = (q) => `(function(q){
+    window.__kwsQ = q;
+    var ORDER = ['hd2160', 'hd1440', 'hd1080', 'hd720', 'large', 'medium', 'small', 'tiny'];
+    var MAP = { '1080': 'hd1080', '720': 'hd720', '480': 'large', '360': 'medium' };
+    function apply() {
+      var p = document.getElementById('movie_player');
+      if (!p || !p.getAvailableQualityLevels) return;
+      var lv = p.getAvailableQualityLevels().filter(function(x){ return x !== 'auto'; });
+      if (!lv.length) return;
+      if (window.__kwsQ === 'auto') { if (window.__kwsQForced) { try { p.setPlaybackQualityRange('auto', 'auto'); } catch (e) {} window.__kwsQForced = false; } return; }
+      var want;
+      if (window.__kwsQ === 'max') want = lv[0];
+      else {
+        var idx = ORDER.indexOf(MAP[window.__kwsQ] || 'hd720');
+        want = lv.filter(function(x){ return ORDER.indexOf(x) >= idx; })[0] || lv[lv.length - 1];
+      }
+      if (p.getPlaybackQuality() !== want) { try { p.setPlaybackQualityRange(want, want); } catch (e) {} }
+      window.__kwsQForced = true;
+    }
+    apply();
+    if (!window.__kwsQT) window.__kwsQT = setInterval(apply, 3000);
+    return 1;
+  })(${JSON.stringify(q)})`
+  async function pushYtQuality(videoId) {
+    const q = ytQualityState.get(videoId)
+    if (!q) return false
+    let hit = false
+    for (const frame of mainWindow.webContents.mainFrame.framesInSubtree) {
+      if (ytVideoIdOf(frame.url) !== videoId) continue
+      try { await frame.executeJavaScript(ytQualityScript(q)); hit = true } catch {}
+    }
+    return hit
+  }
+  // Can this embed play? YouTube's player response says OK, or the reason it
+  // can't (age restriction, removed, private, embedding disabled). When the
+  // player doesn't start at all, the page only shows the message as text.
+  const YT_STATUS_JS = `(function(){
+    var p = document.getElementById('movie_player'), ps = null;
+    try { var pr = p && p.getPlayerResponse && p.getPlayerResponse(); ps = pr && pr.playabilityStatus; } catch (e) {}
+    if (!ps) { try { var raw = window.ytcfg && ytcfg.get('PLAYER_VARS'); var er = raw && raw.embedded_player_response; ps = er && JSON.parse(er).playabilityStatus; } catch (e) {} }
+    var v = document.querySelector('video');
+    var playing = !!(v && v.readyState >= 2);
+    if (ps && ps.status === 'OK') return { ok: true };
+    var text = '';
+    if (ps) text = [ps.reason, ps.errorScreen && JSON.stringify(ps.errorScreen).match(/"text":"([^"]{6,200})"/) ? RegExp.$1 : ''].filter(Boolean).join(' — ');
+    if (!text && !playing) text = (document.body && document.body.innerText || '').trim().split('\\n').filter(Boolean).slice(0, 3).join(' — ');
+    if (!ps && (playing || !text)) return { ok: true, unknown: true };
+    return { ok: false, status: ps ? ps.status : 'NO_PLAYER', text: text.slice(0, 300) };
+  })()`
+  ipcMain.handle('yt-status', async (_, videoId) => {
+    for (const frame of mainWindow.webContents.mainFrame.framesInSubtree) {
+      if (ytVideoIdOf(frame.url) !== String(videoId)) continue
+      try { return await frame.executeJavaScript(YT_STATUS_JS) } catch { return null }
+    }
+    return null
+  })
+
+  ipcMain.handle('set-youtube-quality', async (_, videoId, q) => {
+    const id = String(videoId || '')
+    if (!id) return
+    ytQualityState.set(id, String(q || 'auto'))
+    for (let i = 0; i < 20; i++) {
+      if (await pushYtQuality(id)) return
+      await new Promise(r => setTimeout(r, 500))
+    }
+  })
+
   async function pushYtState(videoId) {
     const state = ytAudioState.get(videoId)
     if (!state) return false
@@ -322,6 +393,7 @@ app.whenReady().then(() => {
       const frame = webFrameMain.fromId(pid, routingId)
       const id = frame && ytVideoIdOf(frame.url)
       if (id && ytAudioState.has(id)) frame.executeJavaScript(ytControllerScript(ytAudioState.get(id))).catch(() => {})
+      if (id && ytQualityState.has(id)) frame.executeJavaScript(ytQualityScript(ytQualityState.get(id))).catch(() => {})
     } catch {}
   })
 
@@ -335,6 +407,43 @@ app.whenReady().then(() => {
       if (await pushYtState(id)) return
       await new Promise(r => setTimeout(r, 500))
     }
+  })
+
+  // ── Twitch quality (dock setting): the embed has no API for it, so the
+  // option is picked in the player's own Settings → Quality menu. Waits for
+  // the video first; the menu is closed again afterwards.
+  const twitchQualityScript = (q) => `(async function(q){
+    var wait = function(ms){ return new Promise(function(r){ setTimeout(r, ms); }); };
+    for (var i = 0; i < 40; i++) { var v = document.querySelector('video'); if (v && v.videoWidth) break; await wait(500); }
+    var btn = document.querySelector('[data-a-target=player-settings-button]');
+    if (!btn) return 'no-settings';
+    btn.click(); await wait(350);
+    var item = document.querySelector('[data-a-target=player-settings-menu-item-quality]');
+    if (!item) { btn.click(); return 'no-quality-item'; }
+    item.click(); await wait(350);
+    var opts = Array.prototype.slice.call(document.querySelectorAll('[data-a-target=player-settings-submenu-quality-option]'));
+    var txt = function(o){ return (o.innerText || '').trim(); };
+    var pick = null;
+    if (q === 'auto') pick = opts.filter(function(o){ return /^auto/i.test(txt(o)); })[0];
+    else if (q === 'max') pick = opts.filter(function(o){ return /źródł|source/i.test(txt(o)); })[0] || opts.filter(function(o){ return !/^auto/i.test(txt(o)); })[0];
+    else {
+      var n = parseInt(q, 10);
+      var res = opts.map(function(o){ return [o, parseInt(txt(o), 10)]; }).filter(function(x){ return x[1] > 0; });
+      var le = res.filter(function(x){ return x[1] <= n; })[0];
+      pick = (le || res[res.length - 1] || [])[0];
+    }
+    if (pick) (pick.querySelector('input') || pick).click();
+    await wait(250);
+    if (document.querySelector('[data-a-target=player-settings-submenu-quality-option], [data-a-target=player-settings-menu-item-quality]')) btn.click();
+    return pick ? txt(pick) : 'no-option';
+  })(${JSON.stringify(q)})`
+
+  ipcMain.handle('set-twitch-quality', async (_, id, q) => {
+    try {
+      const wc = webContents.fromId(Number(id))
+      if (!wc || wc.isDestroyed()) return
+      return await wc.executeJavaScript(twitchQualityScript(String(q || 'auto')))
+    } catch { return 'error' }
   })
 
   ipcMain.handle('set-webcontents-muted', (_, id, muted) => {
@@ -801,6 +910,446 @@ app.whenReady().then(() => {
       }
       return { pinned: !!pinned, styled: msgs >= 0, msgs: Math.max(0, msgs) }
     } catch { return false }
+  })
+
+  // ── Recording a dock ────────────────────────────────────────────────────
+  // The player page's own <video> is captured (captureStream → MediaRecorder,
+  // WebM). Its picture and sound are recorded even while the dock is muted.
+  // The page queues 1-second chunks (base64); main pulls them every second
+  // with executeJavaScript and appends them to the file — no network, no
+  // extra binaries. Finished when stopped, or when the page/video goes away.
+  const recordings = new Map() // id -> { path, out, bytes, timer, target, finishing }
+  let recSeq = 0
+
+  const REC_START_JS = `(function(){
+    if (window.__kwsRec && !window.__kwsRec.finished) return 'busy';
+    var vids = Array.prototype.slice.call(document.querySelectorAll('video')).filter(function(v){ return v.readyState >= 2 && v.videoWidth > 0; });
+    vids.sort(function(a, b){ return b.videoWidth * b.videoHeight - a.videoWidth * a.videoHeight; });
+    var v = vids[0];
+    if (!v) return 'novideo';
+    var stream;
+    try { stream = v.captureStream(); } catch (e) { return 'err:' + e.message; }
+    var types = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
+    var mime = types.filter(function(t){ return MediaRecorder.isTypeSupported(t); })[0];
+    var rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 6000000, audioBitsPerSecond: 160000 });
+    var queue = [], pending = 0, stopped = false;
+    rec.ondataavailable = function(e){
+      if (!e.data || !e.data.size) return;
+      pending++;
+      e.data.arrayBuffer().then(function(buf){
+        var b = new Uint8Array(buf), str = '', CH = 0x8000;
+        for (var i = 0; i < b.length; i += CH) str += String.fromCharCode.apply(null, b.subarray(i, i + CH));
+        queue.push(btoa(str));
+        pending--;
+      });
+    };
+    rec.onstop = function(){ stopped = true; };
+    window.__kwsRec = {
+      finished: false,
+      take: function(){ var out = queue.join('|'); queue = []; var done = stopped && pending === 0; if (done) this.finished = true; return { data: out, done: done }; },
+      stop: function(){ try { if (rec.state !== 'inactive') rec.stop(); } catch (e) { stopped = true; } }
+    };
+    rec.start(1000);
+    return 'ok:' + mime;
+  })()`
+
+  // where the dock's player lives: its webview, or a YouTube frame in this window
+  function recFrame(target) {
+    if (target.wcId) {
+      const wc = webContents.fromId(Number(target.wcId))
+      return wc && !wc.isDestroyed() ? wc.mainFrame : null
+    }
+    if (target.ytId) {
+      for (const f of mainWindow.webContents.mainFrame.framesInSubtree) if (ytVideoIdOf(f.url) === target.ytId) return f
+    }
+    return null
+  }
+
+  function recFinish(id, reason) {
+    const r = recordings.get(id)
+    if (!r || r.closed) return
+    r.closed = true
+    clearInterval(r.timer)
+    recordings.delete(id)
+    r.out.end(() => {
+      if (!mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('rec-ended', { id, path: r.path, bytes: r.bytes, reason })
+        mainWindow.webContents.send('rec-active', recordings.size)
+      }
+    })
+  }
+
+  async function recPull(id) {
+    const r = recordings.get(id)
+    if (!r || r.pulling) return
+    r.pulling = true
+    try {
+      const frame = recFrame(r.target)
+      if (!frame) { recFinish(id, 'gone'); return }
+      const res = await frame.executeJavaScript('window.__kwsRec ? window.__kwsRec.take() : { data: "", done: true }')
+      if (res?.data) for (const part of res.data.split('|')) {
+        const buf = Buffer.from(part, 'base64')
+        r.bytes += buf.length
+        r.out.write(buf)
+      }
+      if (res?.done) recFinish(id, r.finishing ? 'stopped' : 'video-ended')
+    } catch {
+      recFinish(id, 'gone') // page reloaded / navigated — keep what we have
+    } finally {
+      if (recordings.has(id)) recordings.get(id).pulling = false
+    }
+  }
+
+  ipcMain.handle('rec-start', async (_, target, label) => {
+    const frame = recFrame(target || {})
+    if (!frame) return { ok: false, error: 'Nie znaleziono playera w tym docku' }
+    let res
+    try { res = await frame.executeJavaScript(REC_START_JS) } catch (e) { return { ok: false, error: 'Nie udało się uruchomić nagrywania' } }
+    if (res === 'novideo') return { ok: false, error: 'Brak wideo do nagrania — stream offline albo jeszcze się ładuje' }
+    if (res === 'busy') return { ok: false, error: 'Ten dock już się nagrywa' }
+    if (!String(res).startsWith('ok')) return { ok: false, error: 'Przeglądarka nie pozwoliła nagrać tego wideo (' + res + ')' }
+    const dir = join(app.getPath('videos'), 'KWS MultiStream')
+    mkdirSync(dir, { recursive: true })
+    const d = new Date(), p2 = (n) => String(n).padStart(2, '0')
+    const stamp = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}-${p2(d.getMinutes())}-${p2(d.getSeconds())}`
+    const safe = String(label || 'stream').replace(/[<>:"/\\|?*\x00-\x1f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60) || 'stream'
+    const path = join(dir, `${safe} ${stamp}.webm`)
+    const id = 'rec' + (++recSeq)
+    const rec = { path, out: createWriteStream(path), bytes: 0, target, finishing: false, timer: null }
+    rec.timer = setInterval(() => recPull(id), 1000)
+    recordings.set(id, rec)
+    mainWindow.webContents.send('rec-active', recordings.size)
+    return { ok: true, id, path }
+  })
+
+  ipcMain.handle('rec-stop', async (_, id) => {
+    const r = recordings.get(id)
+    if (!r) return
+    r.finishing = true
+    try { await recFrame(r.target)?.executeJavaScript('window.__kwsRec && window.__kwsRec.stop()') } catch {}
+    // the poller writes the last chunks and closes the file; give up after 6 s
+    setTimeout(() => recFinish(id, 'stopped'), 6000)
+  })
+
+  ipcMain.handle('show-in-folder', (_, p) => { if (p) shell.showItemInFolder(String(p)) })
+
+  // "Nagrane" toolbar menu — only files inside the recordings folder
+  const recDir = () => join(app.getPath('videos'), 'KWS MultiStream')
+  const inRecDir = (p) => { try { return normalize(String(p)).startsWith(normalize(recDir()) + sep) } catch { return false } }
+  ipcMain.handle('rec-list', () => {
+    try {
+      return readdirSync(recDir())
+        .filter(n => /\.webm$/i.test(n))
+        .map(n => { const p = join(recDir(), n); const st = statSync(p); return { name: n, path: p, size: st.size, mtime: st.mtimeMs } })
+        .sort((a, b) => b.mtime - a.mtime)
+    } catch { return [] }
+  })
+  ipcMain.handle('rec-open', (_, p) => { if (inRecDir(p)) return shell.openPath(String(p)) })
+  ipcMain.handle('rec-delete', async (_, p) => { if (inRecDir(p)) { try { await shell.trashItem(String(p)); return true } catch { return false } } })
+  ipcMain.handle('rec-open-folder', () => { mkdirSync(recDir(), { recursive: true }); return shell.openPath(recDir()) })
+
+  // ── Browser window glued to a dock ──────────────────────────────────────
+  // For what the app itself can't play (YouTube 18+, sites behind Cloudflare):
+  // the user's own Chrome (Edge as fallback) opens the page as an app window
+  // on their normal profile — logged in, age-verified. KWS finds that window,
+  // makes the KWS window its owner (it stays above KWS and minimises with
+  // it), drops its frame and keeps it exactly over the dock. Moving another
+  // program's window needs Win32 calls: a small PowerShell helper does them.
+  let winHelper = null
+  let helperQueue = []
+  let helperBuf = ''
+  let helperReady = null
+  function helper() {
+    if (winHelper && !winHelper.killed) return helperReady
+    const file = join(app.getPath('temp'), 'kws-winhelper.ps1')
+    writeFileSync(file, winHelperScript)
+    winHelper = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file], { windowsHide: true })
+    helperQueue = []
+    helperBuf = ''
+    helperReady = new Promise((resolve) => {
+      let ready = false
+      winHelper.stdout.on('data', (d) => {
+        helperBuf += d.toString()
+        let i
+        while ((i = helperBuf.indexOf('\n')) >= 0) {
+          const line = helperBuf.slice(0, i).replace(/\r$/, '')
+          helperBuf = helperBuf.slice(i + 1)
+          if (!ready) { if (line === 'READY') { ready = true; resolve(true) } continue }
+          const cb = helperQueue.shift()
+          if (cb) cb(line)
+        }
+      })
+      winHelper.on('exit', () => { winHelper = null; helperQueue.splice(0).forEach(cb => cb('err exit')); if (!ready) resolve(false) })
+    })
+    return helperReady
+  }
+  async function hcmd(line) {
+    if (!(await helper())) return 'err no-helper'
+    return new Promise((resolve) => { helperQueue.push(resolve); winHelper.stdin.write(line + '\n') })
+  }
+
+  const BROWSERS = [
+    { name: 'Chrome', exe: () => [join(process.env.PROGRAMFILES || 'C:\\Program Files', 'Google\\Chrome\\Application\\chrome.exe'), join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'Google\\Chrome\\Application\\chrome.exe'), join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe')] },
+    { name: 'Edge', exe: () => [join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'Microsoft\\Edge\\Application\\msedge.exe'), join(process.env.PROGRAMFILES || 'C:\\Program Files', 'Microsoft\\Edge\\Application\\msedge.exe')] },
+  ]
+  const findBrowser = () => {
+    for (const b of BROWSERS) for (const p of b.exe()) { try { if (statSync(p).isFile()) return { name: b.name, path: p } } catch {} }
+    return null
+  }
+  const listWins = async () => {
+    const out = await hcmd('LIST Chrome_WidgetWin_1')
+    if (!out || out.startsWith('err')) return []
+    return out.split('|').filter(Boolean).map(r => { const [h, pid, ...t] = r.split('\t'); return { hwnd: h, pid, title: t.join(' ') } })
+  }
+  const kwsHwnd = () => {
+    const b = mainWindow.getNativeWindowHandle()
+    return (b.length >= 8 ? b.readBigUInt64LE(0) : BigInt(b.readUInt32LE(0))).toString()
+  }
+
+  // KWS's own Chrome profile (separate folder, separate sign-in — the user's
+  // main browser stays untouched). Chrome refuses remote control of its
+  // default profile, but allows it for a separate one: through that local
+  // port KWS sets the page's volume / mute and styles YouTube down to its
+  // player. The user signs in to YouTube there once (needed for 18+).
+  const extProfileDir = () => join(app.getPath('userData'), 'chrome-profile')
+  let extPort = 0
+  // The port Chrome really listens on — written to DevToolsActivePort in the
+  // profile. If the profile is already running (e.g. left open after KWS was
+  // restarted), a new launch joins it and our --remote-debugging-port is
+  // ignored, so always trust the file.
+  const portFromProfile = async () => {
+    try {
+      const p = parseInt(readFileSync(join(extProfileDir(), 'DevToolsActivePort'), 'utf8').split(/\r?\n/)[0], 10)
+      if (!p) return 0
+      const r = await fetch(`http://127.0.0.1:${p}/json/version`, { signal: AbortSignal.timeout(2000) })
+      return r.ok ? p : 0
+    } catch { return 0 }
+  }
+  const cdpTargets = async () => {
+    if (!extPort) extPort = await portFromProfile()
+    if (!extPort) return []
+    try { return await (await fetch(`http://127.0.0.1:${extPort}/json`, { signal: AbortSignal.timeout(2000) })).json() } catch { extPort = 0; return [] }
+  }
+  const cdpEval = (wsUrl, expression) => new Promise((resolve) => {
+    let ws
+    const done = (v) => { try { ws.close() } catch {} resolve(v) }
+    try { ws = new WebSocket(wsUrl) } catch { resolve(null); return }
+    const t = setTimeout(() => done(null), 4000)
+    ws.onopen = () => ws.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression, returnByValue: true } }))
+    ws.onmessage = (ev) => { try { const m = JSON.parse(ev.data); if (m.id === 1) { clearTimeout(t); done(m.result?.result?.value ?? null) } } catch {} }
+    ws.onerror = () => { clearTimeout(t); done(null) }
+  })
+  // In the page: YouTube shows only its player, filling the window; the
+  // dock's sound state is held on every <video> + the YouTube player API.
+  const extPageJs = (audio, yt) => `(function(m, vol, yt){
+    window.__kwsExtA = { m: m, vol: vol };
+    if (yt) {
+      var st = document.getElementById('kws-fill');
+      if (!st) { st = document.createElement('style'); st.id = 'kws-fill'; (document.head || document.documentElement).appendChild(st); }
+      var css = 'html,body{overflow:hidden!important;background:#000!important}' +
+        'ytd-masthead,#masthead-container,#secondary,#below,#chat-container,tp-yt-app-drawer{display:none!important}' +
+        '#movie_player{position:fixed!important;left:0!important;top:0!important;width:100vw!important;height:100vh!important;z-index:2147483646!important;background:#000!important}' +
+        '#movie_player .html5-video-container,#movie_player video{width:100%!important;height:100%!important;left:0!important;top:0!important;object-fit:contain!important}';
+      if (st.textContent !== css) { st.textContent = css; window.dispatchEvent(new Event('resize')); }
+    }
+    function apply() {
+      var s = window.__kwsExtA;
+      var p = document.getElementById('movie_player');
+      try { if (p && p.setVolume) { p.setVolume(s.vol); if (s.m) p.mute(); else p.unMute(); } } catch (e) {}
+      var vs = document.querySelectorAll('video');
+      for (var i = 0; i < vs.length; i++) { try { vs[i].muted = !!s.m; vs[i].volume = s.m ? 0 : s.vol / 100; } catch (e) {} }
+    }
+    apply();
+    if (!window.__kwsExtT) window.__kwsExtT = setInterval(apply, 700);
+    return 1;
+  })(${!!audio.muted}, ${Math.max(0, Math.min(100, Math.round(Number(audio.volume) || 0)))}, ${!!yt})`
+  // apply to the dock's page (found by its id once, then by target id)
+  const extApply = async (e) => {
+    if (!e.cdp) return false
+    if (!e.wsUrl) {
+      const t = (await cdpTargets()).find(x => x.type === 'page' && (e.targetId ? x.id === e.targetId : (x.url.includes(e.match) && !(e.before && e.before.has(x.id)))))
+      if (!t) return false
+      e.targetId = t.id
+      e.wsUrl = t.webSocketDebuggerUrl
+    }
+    const r = await cdpEval(e.wsUrl, extPageJs(e.audio || { muted: true, volume: 100 }, e.yt))
+    if (r === null) e.wsUrl = '' // page navigated / reloaded: look it up again next time
+    return r !== null
+  }
+
+  // which Chrome: 'main' = the user's own profile (signed in; no sound control
+  // — Chrome forbids remote control of it), 'kws' = KWS's profile (sound
+  // control, needs its own sign-in). Set from Settings.
+  let extProfileMode = 'main'
+  ipcMain.handle('ext-profile', (_, mode) => { extProfileMode = mode === 'kws' ? 'kws' : 'main' })
+  // stop KWS's Chrome profile completely (all its windows) and wait until it's gone
+  const stopKwsProfile = async () => {
+    for (const t of await cdpTargets()) {
+      if (t.type === 'page') { try { await fetch(`http://127.0.0.1:${extPort}/json/close/${t.id}`, { signal: AbortSignal.timeout(2000) }) } catch {} }
+    }
+    for (let i = 0; i < 32 && (await portFromProfile()); i++) await new Promise(r => setTimeout(r, 250))
+    await new Promise(r => setTimeout(r, 600))
+    extPort = 0
+  }
+
+  const extWins = new Map() // dockIndex -> { hwnd, rect, browser }
+  const placeExt = async (dockIndex) => {
+    const e = extWins.get(dockIndex)
+    if (!e || !e.rect || mainWindow.isDestroyed() || mainWindow.isMinimized()) return
+    const cb = mainWindow.getContentBounds()
+    const dip = { x: Math.round(cb.x + e.rect.x), y: Math.round(cb.y + e.rect.y), width: Math.round(e.rect.w), height: Math.round(e.rect.h) }
+    const px = process.platform === 'win32' ? screen.dipToScreenRect(mainWindow, dip) : dip
+    const sf = screen.getDisplayMatching(px).scaleFactor || 1
+    const TITLE = Math.round(31 * sf), SIDE = Math.max(1, Math.round(sf))
+    if (e.mode !== 'ytwatch') {
+      // whole page: cut off Chrome's own title bar and 1-px borders
+      await hcmd(`MOVE ${e.hwnd} ${px.x} ${px.y} ${px.width} ${px.height} ${TITLE} ${SIDE}`)
+      return
+    }
+    // YouTube watch page, measured: up to ~1000 px wide it is one column — the
+    // player sits at the left edge right under the 56-px masthead, as wide as
+    // the page minus its 15-px scrollbar, height = width·9/16 + 8. So: size the
+    // window for a player that fits the dock, show only the player, centred.
+    const MAST = 56, SCROLL = 15, MAXW = 975
+    let pw = Math.min(dip.width, MAXW)
+    if (Math.round(pw * 9 / 16) + 8 > dip.height) pw = Math.max(160, Math.floor((dip.height - 8) * 16 / 9))
+    const ph = Math.round(pw * 9 / 16) + 8
+    const P = (v) => Math.round(v * sf)
+    // show a bit less than the computed player: Chrome's scrollbar / player
+    // height differ by a few px from the measurement, and the page's white
+    // background showed along the right and bottom edges
+    const TRIM_R = 6, TRIM_B = 12
+    const vw = pw - TRIM_R, vh = ph - TRIM_B
+    const shownX = px.x + P((dip.width - vw) / 2), shownY = px.y + P((dip.height - vh) / 2)
+    const winX = shownX - SIDE, winY = shownY - TITLE - P(MAST)
+    const winW = P(pw + SCROLL) + 2 * SIDE, winH = TITLE + P(MAST + ph + 240)
+    await hcmd(`PLACE ${e.hwnd} ${winX} ${winY} ${winW} ${winH} ${SIDE} ${TITLE + P(MAST)} ${SIDE + P(vw)} ${TITLE + P(MAST + vh)}`)
+  }
+  const placeAll = () => { for (const k of extWins.keys()) placeExt(k) }
+  mainWindow.on('move', placeAll)
+  mainWindow.on('resize', placeAll)
+  mainWindow.on('restore', placeAll)
+  mainWindow.on('enter-full-screen', () => setTimeout(placeAll, 300))
+  mainWindow.on('leave-full-screen', () => setTimeout(placeAll, 300))
+  setInterval(() => { for (const e of extWins.values()) extApply(e) }, 3000)
+  // the user may close the browser window themselves
+  setInterval(async () => {
+    for (const [k, e] of extWins) {
+      if ((await hcmd('ALIVE ' + e.hwnd)) === '0') {
+        extWins.delete(k)
+        if (!mainWindow.isDestroyed()) mainWindow.webContents.send('ext-closed', k)
+      }
+    }
+  }, 2000)
+  app.on('before-quit', () => { for (const e of extWins.values()) hcmd('CLOSE ' + e.hwnd); extWins.clear() })
+
+  ipcMain.handle('ext-open', async (_, dockIndex, url, rect) => {
+    let u
+    try { u = new URL(String(url)) } catch { return { ok: false, error: 'Zły adres' } }
+    if (!/^https?:$/.test(u.protocol)) return { ok: false, error: 'Zły adres' }
+    if (process.platform !== 'win32') return { ok: false, error: 'Tylko w Windows' }
+    const browser = findBrowser()
+    if (!browser) return { ok: false, error: 'Nie znaleziono Chrome ani Edge' }
+    const ytId = /(^|\.)youtube\.com$/.test(u.hostname) ? (u.searchParams.get('v') || '') : ''
+    const openUrl = ytId ? `https://www.youtube.com/watch?v=${encodeURIComponent(ytId)}` : u.toString()
+    const old = extWins.get(dockIndex)
+    if (old) { hcmd('CLOSE ' + old.hwnd); extWins.delete(dockIndex) }
+    const before = new Set((await listWins()).map(w => w.hwnd))
+    // YouTube: the normal watch page — embeds (incl. watch_popup) never play
+    // age-restricted videos
+    // port 0: Chrome picks a free port and writes it to DevToolsActivePort in
+    // the profile — read from there, also when the profile was already running
+    const useKws = extProfileMode === 'kws'
+    if (!useKws) {
+      // the user's own Chrome: signed in, the page is cropped to the player
+      const before = new Set((await listWins()).map(w => w.hwnd))
+      spawn(browser.path, ['--app=' + openUrl, '--new-window'], { detached: true, stdio: 'ignore' }).unref()
+      let win = null
+      for (let i = 0; i < 40 && !win; i++) {
+        await new Promise(r => setTimeout(r, 300))
+        win = (await listWins()).find(w => !before.has(w.hwnd))
+      }
+      if (!win) return { ok: false, error: `${browser.name} się uruchomił, ale nie znalazłem jego okna` }
+      await hcmd(`PREP ${win.hwnd} ${kwsHwnd()}`)
+      extWins.set(dockIndex, { hwnd: win.hwnd, rect, browser: browser.name, cdp: false, mode: ytId ? 'ytwatch' : 'page' })
+      await placeExt(dockIndex)
+      return { ok: true, browser: browser.name, controlled: false }
+    }
+    extPort = await portFromProfile()
+    // pages already in the profile: the new one is told apart from these; stream
+    // windows left over from a previous KWS session (crash) are closed first
+    const beforeTargets = new Set()
+    let closedOrphans = 0
+    for (const t of await cdpTargets()) {
+      if (t.type !== 'page') continue
+      const orphan = extWins.size === 0 && /^https:\/\/(www\.youtube\.com\/watch|strumyk\.cv\/)/.test(t.url)
+      if (orphan) { closedOrphans++; try { await fetch(`http://127.0.0.1:${extPort}/json/close/${t.id}`, { signal: AbortSignal.timeout(2000) }) } catch {} }
+      else beforeTargets.add(t.id)
+    }
+    // closing its last window shuts that Chrome down: wait until it is gone,
+    // or the new window would be handed to a browser that is just exiting
+    if (closedOrphans && !beforeTargets.size) {
+      for (let i = 0; i < 24 && (await portFromProfile()); i++) await new Promise(r => setTimeout(r, 250))
+      await new Promise(r => setTimeout(r, 500))
+      extPort = 0
+    }
+    spawn(browser.path, [
+      '--user-data-dir=' + extProfileDir(), '--remote-debugging-port=0', '--remote-allow-origins=*',
+      '--no-first-run', '--no-default-browser-check', '--autoplay-policy=no-user-gesture-required',
+      '--app=' + openUrl, '--new-window',
+    ], { detached: true, stdio: 'ignore' }).unref()
+    // wait for the new app window to appear
+    let found = null
+    for (let i = 0; i < 40 && !found; i++) {
+      await new Promise(r => setTimeout(r, 300))
+      found = (await listWins()).find(w => !before.has(w.hwnd))
+    }
+    if (!found) return { ok: false, error: `${browser.name} się uruchomił, ale nie znalazłem jego okna` }
+    await hcmd(`PREP ${found.hwnd} ${kwsHwnd()}`)
+    for (let i = 0; i < 20 && !extPort; i++) { extPort = await portFromProfile(); if (!extPort) await new Promise(r => setTimeout(r, 250)) }
+    const entry = { hwnd: found.hwnd, rect, browser: browser.name, cdp: true, yt: !!ytId, match: ytId || u.hostname, before: beforeTargets, audio: extAudio.get(dockIndex) || { muted: true, volume: 100 } }
+    // controlled + styled → the page fills the dock; without control fall back to cropping
+    let ok = false
+    for (let i = 0; i < 10 && !ok; i++) { ok = await extApply(entry); if (!ok) await new Promise(r => setTimeout(r, 500)) }
+    entry.cdp = ok
+    entry.mode = ok ? 'page' : (ytId ? 'ytwatch' : 'page')
+    extWins.set(dockIndex, entry)
+    await placeExt(dockIndex)
+    return { ok: true, browser: browser.name, controlled: ok }
+  })
+  // dock's sound → the page (kept also before the window exists)
+  const extAudio = new Map()
+  ipcMain.handle('ext-audio', (_, dockIndex, muted, volume) => {
+    const a = { muted: !!muted, volume: Number(volume) || 0 }
+    extAudio.set(dockIndex, a)
+    const e = extWins.get(dockIndex)
+    if (e) { e.audio = a; extApply(e) }
+  })
+  // sign in to YouTube in KWS's Chrome profile (a normal window, no remote control)
+  ipcMain.handle('ext-login', async () => {
+    const browser = findBrowser()
+    if (!browser) return { ok: false, error: 'Nie znaleziono Chrome ani Edge' }
+    for (const [k, e] of extWins) { if (e.cdp) { hcmd('CLOSE ' + e.hwnd); extWins.delete(k); if (!mainWindow.isDestroyed()) mainWindow.webContents.send('ext-closed', k) } }
+    // a running KWS profile has remote control on — Google refuses sign-in
+    // there. Stop it completely, then open sign-in in a plain instance.
+    await stopKwsProfile()
+    spawn(browser.path, ['--user-data-dir=' + extProfileDir(), '--no-first-run', '--no-default-browser-check',
+      'https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F'], { detached: true, stdio: 'ignore' }).unref()
+    extPort = 0 // the next dock window starts that profile again with control on
+    return { ok: true, browser: browser.name }
+  })
+
+  ipcMain.handle('ext-rect', (_, dockIndex, rect) => {
+    const e = extWins.get(dockIndex)
+    if (!e) return
+    e.rect = rect
+    placeExt(dockIndex)
+  })
+  ipcMain.handle('ext-close', (_, dockIndex) => {
+    const e = extWins.get(dockIndex)
+    if (!e) return
+    extWins.delete(dockIndex)
+    return hcmd('CLOSE ' + e.hwnd)
   })
 
   // ── Kick / Twitch chat font size (Settings) ─────────────────────────────

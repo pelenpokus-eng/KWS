@@ -19,7 +19,7 @@ function FontPicker({ value, onChange }) {
   )
 }
 
-export default function SettingsModal({ chatConfig, autoHideToolbar = false, onSave, onClose }) {
+export default function SettingsModal({ chatConfig, autoHideToolbar = false, extProfile = 'main', onSave, onClose }) {
   const [room, setRoom] = useState(chatConfig.room || 'chatraszei')
   const [customUrl, setCustomUrl] = useState(chatConfig.customUrl || '')
   const [type, setType] = useState(['chatango', 'custom'].includes(chatConfig.type) ? chatConfig.type : (chatConfig.baseType || 'chatango'))
@@ -28,9 +28,10 @@ export default function SettingsModal({ chatConfig, autoHideToolbar = false, onS
   const [kickFontPct, setKickFontPct] = useState(chatConfig.kickFontPct || 100)
   const [twitchFontPct, setTwitchFontPct] = useState(chatConfig.twitchFontPct || 100)
   const [hideBar, setHideBar] = useState(!!autoHideToolbar)
+  const [extProf, setExtProf] = useState(extProfile)
 
   function handleSave() {
-    onSave({ type, room: room.trim(), customUrl: customUrl.trim(), fontPct, kickFontPct, twitchFontPct, autoHideToolbar: hideBar })
+    onSave({ type, room: room.trim(), customUrl: customUrl.trim(), fontPct, kickFontPct, twitchFontPct, autoHideToolbar: hideBar, extProfile: extProf })
   }
 
   function handleKey(e) {
@@ -116,6 +117,27 @@ export default function SettingsModal({ chatConfig, autoHideToolbar = false, onS
               onKeyDown={handleKey}
             />
           </>
+        )}
+
+        <div className="modal-label" style={{ marginTop: 6 }}>Chrome w docku (YouTube 18+, strumyk)</div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
+          <button className={`btn ${extProf === 'main' ? 'active' : ''}`} onClick={() => setExtProf('main')}>Twój Chrome (zalogowany)</button>
+          <button className={`btn ${extProf === 'kws' ? 'active' : ''}`} onClick={() => setExtProf('kws')}>Profil KWS (dźwięk z KWS)</button>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5, marginBottom: 8 }}>
+          {extProf === 'main'
+            ? 'Twój zwykły Chrome z Twoim kontem — działa od razu. Głośność ustawiasz w samym playerze (Chrome nie pozwala nim sterować z zewnątrz).'
+            : 'Osobny profil Chrome tylko dla KWS — suwak, mute, Solo/Multi i „Wycisz wszystko” sterują jego dźwiękiem, obraz wypełnia dock. Wymaga jednorazowego logowania:'}
+        </div>
+        {extProf === 'kws' && (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
+            <button className="btn" onClick={async () => { const r = await window.electronAPI?.extLogin(); setShowupMsg(r?.ok ? '' : (r?.error || '')) }}>
+              Zaloguj do YouTube w profilu KWS
+            </button>
+            <span style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+              Zamknie okna Chrome w dockach, otworzy zwykłe okno logowania — zaloguj się, zaakceptuj cookies i je zamknij.
+            </span>
+          </div>
         )}
 
         <div className="modal-label" style={{ marginTop: 6 }}>Konto ShowUp</div>

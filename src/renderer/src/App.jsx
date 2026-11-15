@@ -49,6 +49,7 @@ const DEFAULT_STATE = {
   gridSplit: { x: 0.5, y: 0.5 },
   tube: DEFAULT_TUBE,
   autoHideToolbar: false,
+  extProfile: 'main',
 }
 
 export default function App() {
@@ -68,6 +69,9 @@ export default function App() {
   const [tube, setTube] = useState(DEFAULT_STATE.tube)
   // Auto-hiding toolbar (Settings): slides away, comes back at the top edge
   const [autoHideToolbar, setAutoHideToolbar] = useState(false)
+  // Chrome in a dock: 'main' (the user's signed-in Chrome) | 'kws' (KWS profile, sound control)
+  const [extProfile, setExtProfile] = useState('main')
+  useEffect(() => { window.electronAPI?.setExtProfile?.(extProfile) }, [extProfile])
   const [tbHover, setTbHover] = useState(false)
   const tbHideTimer = useRef(null)
   const showToolbar = useCallback(() => { clearTimeout(tbHideTimer.current); setTbHover(true) }, [])
@@ -150,6 +154,7 @@ export default function App() {
         if (state.chatConfig2 && typeof state.chatConfig2 === 'object') setChatConfig2(migrateChatConfig(state.chatConfig2))
         if (typeof state.chatSplit === 'number') setChatSplit(Math.max(0.2, Math.min(0.8, state.chatSplit)))
         if (typeof state.autoHideToolbar === 'boolean') setAutoHideToolbar(state.autoHideToolbar)
+        if (state.extProfile === 'kws' || state.extProfile === 'main') setExtProfile(state.extProfile)
         if (state.tube && typeof state.tube === 'object') setTube({ ...DEFAULT_TUBE, ...state.tube })
         if (state.gridSplit && typeof state.gridSplit.x === 'number' && typeof state.gridSplit.y === 'number') {
           setGridSplit({ x: Math.max(0.15, Math.min(0.85, state.gridSplit.x)), y: Math.max(0.15, Math.min(0.85, state.gridSplit.y)) })
@@ -186,10 +191,11 @@ export default function App() {
         gridSplit,
         tube,
         autoHideToolbar,
+        extProfile,
       })
     }, 300)
     return () => clearTimeout(t)
-  }, [docks, layout, chatConfig, activeAudioDock, multiAudio, muteAll, streamHistory, favorites, dualChat, chatConfig2, chatSplit, gridSplit, tube, autoHideToolbar, loaded])
+  }, [docks, layout, chatConfig, activeAudioDock, multiAudio, muteAll, streamHistory, favorites, dualChat, chatConfig2, chatSplit, gridSplit, tube, autoHideToolbar, extProfile, loaded])
 
   // Fullscreen state comes from main (button and F11 both toggle it there)
   const [fullScreen, setFullScreen] = useState(false)
@@ -264,6 +270,17 @@ export default function App() {
           if (!prev[dockIndex]?.embedUrl || prev[dockIndex].volume === vol) return prev
           const next = [...prev]
           next[dockIndex] = { ...next[dockIndex], volume: vol }
+          return next
+        })
+        break
+      }
+
+      case 'setQuality': {
+        const q = String(payload || 'auto')
+        setDocks(prev => {
+          if (!prev[dockIndex]?.embedUrl || (prev[dockIndex].quality || 'auto') === q) return prev
+          const next = [...prev]
+          next[dockIndex] = { ...next[dockIndex], quality: q }
           return next
         })
         break
@@ -489,8 +506,10 @@ export default function App() {
         <SettingsModal
           chatConfig={chatConfig}
           autoHideToolbar={autoHideToolbar}
-          onSave={({ autoHideToolbar: hide, ...config }) => {
+          extProfile={extProfile}
+          onSave={({ autoHideToolbar: hide, extProfile: prof, ...config }) => {
             setAutoHideToolbar(!!hide)
+            if (prof) setExtProfile(prof)
             setTbHover(false)
             setChatConfig(prev => {
               // Same chat source (only e.g. the font changed): keep whatever the

@@ -8,6 +8,18 @@ import AddStreamModal from './AddStreamModal'
 // Cloudflare "checking your browser" page titles (PL / EN)
 const CHECK_TITLE = /cierpliwo|chwileczk|weryfikacj|just a moment|attention required|checking your browser/i
 
+// Video quality per dock (stored in the dock). YouTube and Twitch let us pick
+// it; Kick's embed and the others choose it themselves.
+const QUALITIES = [
+  { key: 'auto', label: 'Auto', hint: 'player dobiera sam' },
+  { key: 'max', label: 'Max', hint: 'najwyższa dostępna' },
+  { key: '1080', label: '1080p' },
+  { key: '720', label: '720p' },
+  { key: '480', label: '480p' },
+  { key: '360', label: '360p' },
+]
+const qualityLabel = (q) => (QUALITIES.find(x => x.key === q) || QUALITIES[0]).label
+
 const TWITCH_GATE_JS = `(function(){
   if (window.__kwsGate) return;
   window.__kwsGate = true;
@@ -54,6 +66,59 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
   const [isDragOver, setIsDragOver] = useState(false)
   const isEmpty = !dock.embedUrl
   const isYouTube = dock.platform === 'youtube'
+  const quality = dock.quality || 'auto'
+  const canQuality = dock.platform === 'youtube' || dock.platform === 'twitch'
+  const qualityRef = useRef(quality)
+  qualityRef.current = quality
+  const [qualityOpen, setQualityOpen] = useState(false)
+  // The stream shown by the user's own browser in a window glued over this
+  // dock (YouTube 18+, Cloudflare sites): { state: 'opening' | 'open', browser }
+  const [ext, setExt] = useState(null)
+  const [extError, setExtError] = useState('')
+  const EXT_BAR = 30 // the top strip of the dock stays KWS's: close / reload
+  const dockRect = () => {
+    const r = containerRef.current?.getBoundingClientRect()
+    return r ? { x: r.left, y: r.top + EXT_BAR, w: r.width, h: Math.max(40, r.height - EXT_BAR) } : null
+  }
+  const extUrl = useRef('')
+  const openExternal = async (url) => {
+    extUrl.current = url
+    setExtError('')
+    setExt({ state: 'opening' })
+    const res = await window.electronAPI?.extOpen(dockIndex, url, dockRect())
+    if (res?.ok) setExt({ state: 'open', browser: res.browser, controlled: res.controlled })
+    else { setExt(null); setExtError(res?.error || 'Nie udało się otworzyć przeglądarki') }
+  }
+  const closeExternal = () => { window.electronAPI?.extClose(dockIndex); setExt(null) }
+  // keep the browser window on the dock: size/position changes (grid drag,
+  // toolbar sliding, layout) + a slow fallback poll
+  useEffect(() => {
+    if (ext?.state !== 'open') return
+    let last = ''
+    const push = () => {
+      const r = dockRect()
+      if (!r) return
+      const k = [r.x, r.y, r.w, r.h].map(Math.round).join(',')
+      if (k !== last) { last = k; window.electronAPI?.extRect(dockIndex, r) }
+    }
+    const ro = new ResizeObserver(push)
+    if (containerRef.current) ro.observe(containerRef.current)
+    window.addEventListener('resize', push)
+    const t = setInterval(push, 400)
+    push()
+    return () => { ro.disconnect(); window.removeEventListener('resize', push); clearInterval(t) }
+  }, [ext?.state, dockIndex])
+  useEffect(() => window.electronAPI?.onExtClosed?.((k) => { if (k === dockIndex) setExt(null) }), [dockIndex])
+  useEffect(() => {
+    if (!ext) return
+    window.electronAPI?.extAudio(dockIndex, muteAll || !hasAudio || volume === 0, volume)
+  }, [ext, muteAll, hasAudio, volume, dockIndex])
+  // another stream in this dock / dock goes away: close the browser window
+  useEffect(() => () => { window.electronAPI?.extClose(dockIndex) }, [dock.embedUrl, dockIndex])
+
+  // YouTube refused to play this video in an embed (age restriction etc.)
+  const [ytError, setYtError] = useState(null) // { text, age }
+  const meta = getPlatformMeta(dock.platform)
   // strumyk.cv sits behind Cloudflare: when the dock shows its check page,
   // offer a window where the user passes it (docks don't take clicks)
   const isCheckSite = dock.platform === 'strumyk'
@@ -118,6 +183,45 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
     return () => obs.disconnect()
   }, [isEmpty, dock.embedUrl])
 
+  // ── Recording this dock ──────────────────────────────────────────────
+  const [rec, setRec] = useState(null)        // { id, start } while recording
+  const [recNote, setRecNote] = useState(null) // { text, path } after it ends / fails
+  const [, setTick] = useState(0)
+  const recRef = useRef(null)
+  recRef.current = rec
+  useEffect(() => {
+    if (!rec) return
+    const t = setInterval(() => setTick(n => n + 1), 1000)
+    return () => clearInterval(t)
+  }, [rec])
+  useEffect(() => window.electronAPI?.onRecEnded?.((info) => {
+    if (info.id !== recRef.current?.id) return
+    setRec(null)
+    const mb = (info.bytes / 1048576).toFixed(info.bytes > 104857600 ? 0 : 1)
+    setRecNote(info.bytes > 0
+      ? { text: `Zapisano nagranie (${mb} MB)${info.reason === 'stopped' ? '' : ' — stream przerwał nagrywanie'}`, path: info.path }
+      : { text: 'Nagranie puste — nic nie zapisano' })
+  }), [])
+  useEffect(() => {
+    if (!recNote) return
+    const t = setTimeout(() => setRecNote(null), 9000)
+    return () => clearTimeout(t)
+  }, [recNote])
+  // a new stream / reload ends the recording (the file keeps what was recorded)
+  useEffect(() => () => { if (recRef.current) window.electronAPI?.recStop(recRef.current.id) }, [liveSrc])
+  const toggleRecording = async () => {
+    if (rec) { window.electronAPI?.recStop(rec.id); return }
+    const target = isYouTube ? { ytId: dock.id } : { wcId: wcIdRef.current }
+    const res = await window.electronAPI?.recStart(target, dock.label || meta.name)
+    if (res?.ok) { setRec({ id: res.id, start: Date.now() }); setRecNote(null) }
+    else setRecNote({ text: res?.error || 'Nie udało się nagrać' })
+  }
+  const recTime = rec ? (() => {
+    const sec = Math.floor((Date.now() - rec.start) / 1000)
+    const h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, ss = sec % 60
+    return (h ? h + ':' : '') + String(m).padStart(2, '0') + ':' + String(ss).padStart(2, '0')
+  })() : ''
+
   const reload = useCallback(() => {
     setLiveSrc('')
     setTimeout(() => setLiveSrc(dock.embedUrl), 50)
@@ -148,6 +252,7 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
         if (dock.platform === 'showup' || dock.platform === 'strumyk') window.electronAPI?.focusVideoPlayer(id)
         if (isCheckSite) setNeedsCheck(CHECK_TITLE.test(wv.getTitle() || ''))
         if (dock.platform === 'twitch') wv.executeJavaScript(TWITCH_GATE_JS).catch(() => {})
+        if (dock.platform === 'twitch' && qualityRef.current !== 'auto') window.electronAPI?.setTwitchQuality(id, qualityRef.current)
       } catch {}
     }
 
@@ -222,6 +327,40 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
     }
   }, [hasAudio, muteAll, liveSrc, isYouTube, dock.id, volume])
 
+  // Quality: YouTube through main's frame controller; Twitch on change (its
+  // load-time apply is in handleReady above)
+  const qualityApplied = useRef(null)
+  useEffect(() => {
+    if (!liveSrc) return
+    if (isYouTube) { window.electronAPI?.setYouTubeQuality(dock.id, quality); return }
+    if (dock.platform === 'twitch') {
+      const id = wcIdRef.current
+      if (id && qualityApplied.current !== null && qualityApplied.current !== quality) window.electronAPI?.setTwitchQuality(id, quality)
+      qualityApplied.current = quality
+    }
+  }, [quality, liveSrc, isYouTube, dock.id, dock.platform])
+
+  // YouTube: check whether the embed can play it; poll — the message comes
+  // a moment after load, and a retry may fix a temporary error
+  useEffect(() => {
+    setYtError(null)
+    if (!isYouTube || !liveSrc) return
+    let stop = false, timer = null
+    const check = async () => {
+      if (stop) return
+      let st = null
+      try { st = await window.electronAPI?.ytStatus(dock.id) } catch {}
+      if (stop) return
+      if (st && st.ok === false) {
+        const age = /wiek|age|18|confirm your|potwierd/i.test(st.text || '') || /AGE|LOGIN_REQUIRED/.test(st.status || '')
+        setYtError({ text: st.text, age })
+      } else if (st && st.ok) setYtError(null)
+      timer = setTimeout(check, st && st.ok && !st.unknown ? 15000 : 3000)
+    }
+    timer = setTimeout(check, 2500)
+    return () => { stop = true; clearTimeout(timer) }
+  }, [isYouTube, liveSrc, dock.id])
+
   // Volume — YouTube uses frame injection; others use webview injection
   useEffect(() => {
     if (!liveSrc || !hasAudio || muteAll) return
@@ -265,7 +404,6 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
     )
   }
 
-  const meta = getPlatformMeta(dock.platform)
 
   return (
     <div
@@ -277,7 +415,7 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {liveSrc && isYouTube && (
+      {liveSrc && isYouTube && !ext && (
         <iframe
           key={liveSrc}
           src={ytMutedSrc(liveSrc)}
@@ -286,7 +424,7 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
           style={{ position: 'absolute', inset: 0, border: 'none', width: '100%', height: '100%', pointerEvents: 'none' }}
         />
       )}
-      {liveSrc && !isYouTube && (
+      {liveSrc && !isYouTube && !ext && (
         <webview
           key={liveSrc}
           ref={webviewRef}
@@ -295,19 +433,93 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
           style={{ position: 'absolute', inset: 0, border: 'none', pointerEvents: 'none' }}
         />
       )}
-      {liveSrc && needsCheck && (
+      {liveSrc && needsCheck && !ext && (
         <div className="dock-check">
           <div className="dock-check-title">Strona wymaga weryfikacji</div>
           <div className="dock-check-text">strumyk.cv sprawdza, czy jesteś człowiekiem (Cloudflare). W aplikacji ta weryfikacja potrafi się zapętlać — wtedy otwórz stream w przeglądarce.</div>
           <div className="dock-check-actions">
-            <button className="btn active" onClick={() => window.electronAPI?.openExternal(dock.embedUrl)}>↗ Otwórz w przeglądarce</button>
+            <button className="btn active" onClick={() => openExternal(dock.embedUrl)} title="Twój Chrome jako okno przyklejone do tego docka">⧉ Otwórz w Chrome w docku</button>
+            <button className="btn" onClick={() => window.electronAPI?.openExternal(dock.embedUrl)}>↗ W przeglądarce</button>
             <button className="btn" onClick={() => window.electronAPI?.openSiteCheck(dock.embedUrl)}>Spróbuj weryfikacji tutaj</button>
           </div>
         </div>
       )}
 
+      {/* YouTube can't play this one in an embed: say why, offer the browser */}
+      {liveSrc && ytError && !ext && (
+        <div className="dock-check">
+          <div className="dock-check-title">{ytError.age ? 'Film z ograniczeniem wiekowym' : 'YouTube nie odtworzy tego filmu tutaj'}</div>
+          <div className="dock-check-text">
+            {ytError.age
+              ? 'YouTube nie pozwala odtwarzać filmów 18+ w osadzonych playerach (takich jak docki). Obejrzysz go w przeglądarce, w której jesteś zalogowany na konto z potwierdzonym wiekiem.'
+              : (ytError.text || 'Film jest niedostępny w osadzonym playerze.')}
+          </div>
+          {ytError.age && ytError.text && <div className="dock-check-text" style={{ opacity: 0.7 }}>YouTube: {ytError.text}</div>}
+          <div className="dock-check-actions">
+            <button className="btn active" onClick={() => openExternal(`https://www.youtube.com/watch?v=${dock.id}`)} title="Twój Chrome (profil z zalogowanym kontem) jako okno przyklejone do tego docka">⧉ Otwórz w Chrome w docku</button>
+            <button className="btn" onClick={() => window.electronAPI?.openExternal(`https://www.youtube.com/watch?v=${dock.id}`)}>↗ W przeglądarce</button>
+            <button className="btn" onClick={() => { setYtError(null); reload() }}>↻ Spróbuj ponownie</button>
+          </div>
+        </div>
+      )}
+
+      {/* the browser window sits on top of this; visible if it isn't there */}
+      {ext && (
+        <div className="dock-ext-bar">
+          <span className="dock-ext-title">⧉ {ext.state === 'opening' ? 'Otwieram przeglądarkę…' : `${ext.browser}${ext.controlled === false ? ' (bez sterowania dźwiękiem)' : ''}`}</span>
+          <button
+            className={`dock-ext-btn ${!muteAll && hasAudio && volume > 0 ? 'on' : ''}`}
+            onClick={() => {
+              if (muteAll) onAction(multiAudio ? 'soloFromMute' : 'soloFromMuteSolo', dockIndex)
+              else if (!hasAudio) onAction('setAudio', dockIndex)
+              else setVolume(v => v === 0 ? 100 : 0)
+            }}
+            title={muteAll ? 'Kliknij aby słuchać tylko tego streama' : !hasAudio ? 'Aktywuj dźwięk' : volume === 0 ? 'Odcisz' : 'Wycisz'}
+          >{volIcon(muteAll ? 0 : (hasAudio ? volume : 0))}</button>
+          <input
+            type="range"
+            className="dock-ext-vol"
+            min={0} max={100}
+            value={volume}
+            onChange={e => setVolume(Number(e.target.value))}
+            title={`Głośność: ${volume}%`}
+          />
+          <button className="dock-ext-btn" onClick={() => openExternal(extUrl.current)} title="Otwórz jeszcze raz">↻</button>
+          <button className="dock-ext-btn close" onClick={closeExternal} title="Zamknij okno przeglądarki">✕</button>
+        </div>
+      )}
+      {ext && (
+        <div className="dock-check dock-ext">
+          <div className="dock-check-title">{ext.state === 'opening' ? 'Otwieram przeglądarkę…' : `Stream w oknie ${ext.browser}`}</div>
+          <div className="dock-check-text">Okno przeglądarki jest przyklejone do tego docka i przesuwa się razem z nim. Dźwięk i jakość ustawiasz w samym playerze.</div>
+          <div className="dock-check-actions">
+            <button className="btn" onClick={closeExternal}>✕ Zamknij okno przeglądarki</button>
+          </div>
+        </div>
+      )}
+      {extError && !ext && (
+        <div className="dock-rec-note">
+          <span>{extError}</span>
+          <button className="dock-rec-note-x" onClick={() => setExtError('')} title="Zamknij">✕</button>
+        </div>
+      )}
+
+      {/* recording: always-visible badge + the "saved" note */}
+      {rec && (
+        <button className="dock-rec-badge" onClick={toggleRecording} title="Nagrywanie — kliknij, aby zatrzymać">
+          <span className="dock-rec-dot" /> REC {recTime}
+        </button>
+      )}
+      {recNote && (
+        <div className="dock-rec-note">
+          <span>{recNote.text}</span>
+          {recNote.path && <button className="btn" onClick={() => window.electronAPI?.showInFolder(recNote.path)}>Pokaż w folderze</button>}
+          <button className="dock-rec-note-x" onClick={() => setRecNote(null)} title="Zamknij">✕</button>
+        </div>
+      )}
+
       {/* Hover overlay controls */}
-      <div className="dock-controls">
+      <div className="dock-controls" style={ext ? { display: 'none' } : undefined}>
         <div className="dock-controls-left">
           <span
             className="dock-drag-handle"
@@ -354,6 +566,38 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
               {volIcon(muteAll ? 0 : (hasAudio ? volume : 0))}
             </button>
           </div>
+
+          {/* Video quality */}
+          <div className="dock-quality">
+            <button
+              className={`dock-btn dock-quality-btn ${quality !== 'auto' ? 'set' : ''}`}
+              onClick={() => canQuality && setQualityOpen(o => !o)}
+              disabled={!canQuality}
+              title={canQuality ? `Jakość obrazu: ${qualityLabel(quality)} (wpływa też na nagranie)` : 'Ten player sam dobiera jakość — nie da się jej tu wybrać'}
+            >{canQuality ? qualityLabel(quality) : 'Auto'}</button>
+            {qualityOpen && canQuality && (
+              <div className="dock-quality-menu" onMouseLeave={() => setQualityOpen(false)}>
+                {QUALITIES.map(q => (
+                  <button
+                    key={q.key}
+                    className={`dock-quality-opt ${quality === q.key ? 'on' : ''}`}
+                    onClick={() => { onAction('setQuality', dockIndex, q.key); setQualityOpen(false) }}
+                  >
+                    <span>{q.label}</span>{q.hint && <span className="dock-quality-hint">{q.hint}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Record this stream */}
+          <button
+            className={`dock-btn rec-btn ${rec ? 'on' : ''}`}
+            onClick={toggleRecording}
+            title={rec ? 'Zatrzymaj nagrywanie' : 'Nagrywaj ten stream (zapis do folderu Wideo\\KWS MultiStream)'}
+          >
+            <span className="rec-icon" />
+          </button>
 
           {/* Favorite */}
           <button

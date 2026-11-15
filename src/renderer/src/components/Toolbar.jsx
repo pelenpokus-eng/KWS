@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import logoUrl from '../assets/logo.png'
 import FavoritesMenu from './FavoritesMenu'
+import RecordingsMenu from './RecordingsMenu'
 
 // Line icons (16px, currentColor) — one consistent set instead of emoji
 const I = {
@@ -179,6 +180,7 @@ export default function Toolbar({
       </div>
 
       <FavoritesMenu favorites={favorites} docks={docks} onDockAction={onDockAction} />
+      <RecordingsMenu />
 
       <span className="toolbar-spacer" />
 

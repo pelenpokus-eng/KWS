@@ -8,6 +8,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveScreenshot: (dataUrl, label) => ipcRenderer.invoke('save-screenshot', dataUrl, label),
   setAlwaysOnTop: (flag) => ipcRenderer.invoke('set-always-on-top', flag),
   quitApp: () => ipcRenderer.invoke('quit-app'),
+  recStart: (target, label) => ipcRenderer.invoke('rec-start', target, label),
+  recStop: (id) => ipcRenderer.invoke('rec-stop', id),
+  showInFolder: (path) => ipcRenderer.invoke('show-in-folder', path),
+  recList: () => ipcRenderer.invoke('rec-list'),
+  recOpen: (path) => ipcRenderer.invoke('rec-open', path),
+  recDelete: (path) => ipcRenderer.invoke('rec-delete', path),
+  recOpenFolder: () => ipcRenderer.invoke('rec-open-folder'),
+  onRecActive: (cb) => {
+    const h = (_, n) => cb(n)
+    ipcRenderer.on('rec-active', h)
+    return () => ipcRenderer.removeListener('rec-active', h)
+  },
+  onRecEnded: (cb) => {
+    const h = (_, info) => cb(info)
+    ipcRenderer.on('rec-ended', h)
+    return () => ipcRenderer.removeListener('rec-ended', h)
+  },
   setContextExtra: (extra) => ipcRenderer.send('context-extra', extra),
   minimizeWindow: () => ipcRenderer.invoke('window-minimize'),
   toggleMaximizeWindow: () => ipcRenderer.invoke('window-toggle-maximize'),
@@ -30,6 +47,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setFrameMuted: (embedUrl, muted) => ipcRenderer.invoke('set-frame-muted', embedUrl, muted),
   setFrameVolume: (embedUrl, volume) => ipcRenderer.invoke('set-frame-volume', embedUrl, volume),
   setYouTubeAudio: (videoId, muted, volume) => ipcRenderer.invoke('set-youtube-audio', videoId, muted, volume),
+  setYouTubeQuality: (videoId, q) => ipcRenderer.invoke('set-youtube-quality', videoId, q),
+  ytStatus: (videoId) => ipcRenderer.invoke('yt-status', videoId),
+  extOpen: (dockIndex, url, rect) => ipcRenderer.invoke('ext-open', dockIndex, url, rect),
+  extRect: (dockIndex, rect) => ipcRenderer.invoke('ext-rect', dockIndex, rect),
+  extClose: (dockIndex) => ipcRenderer.invoke('ext-close', dockIndex),
+  extAudio: (dockIndex, muted, volume) => ipcRenderer.invoke('ext-audio', dockIndex, muted, volume),
+  extLogin: () => ipcRenderer.invoke('ext-login'),
+  setExtProfile: (mode) => ipcRenderer.invoke('ext-profile', mode),
+  onExtClosed: (cb) => {
+    const h = (_, dockIndex) => cb(dockIndex)
+    ipcRenderer.on('ext-closed', h)
+    return () => ipcRenderer.removeListener('ext-closed', h)
+  },
+  setTwitchQuality: (id, q) => ipcRenderer.invoke('set-twitch-quality', id, q),
   chatangoCompact: (id, fontPct) => ipcRenderer.invoke('chatango-compact', id, fontPct),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   setChatFont: (id, pct) => ipcRenderer.invoke('set-chat-font', id, pct),
