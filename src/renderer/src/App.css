@@ -1620,3 +1620,45 @@ body.is-dragging iframe {
 .fav-file-msg { font-size: 11px; color: var(--text-3); margin-top: 6px; line-height: 1.4; word-break: break-all; }
 /* armed "clear app data" button in Settings */
 .modal .btn.danger { color: #fca5a5; border-color: var(--danger); }
+
+/* ── Settings dialog: collapsible groups ── */
+.settings-modal { width: 540px; padding-bottom: 0; }
+.set-group {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  margin-bottom: 8px; background: var(--bg-1);
+}
+.set-group.open { border-color: var(--border-h); }
+.set-group-head {
+  width: 100%; display: flex; align-items: center; gap: 10px;
+  padding: 11px 12px; background: none; border: none; cursor: pointer;
+  color: var(--text-1); font: inherit; text-align: left; border-radius: var(--radius-sm);
+}
+.set-group-head:hover { background: var(--bg-3); }
+.set-group-icon { width: 20px; text-align: center; font-size: 14px; opacity: 0.9; }
+.set-group-title { font-size: 13px; font-weight: 600; flex-shrink: 0; }
+.set-group-summary {
+  flex: 1; min-width: 0; font-size: 11px; color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right;
+}
+.set-group-chev { margin-left: auto; color: var(--text-2); font-size: 15px; width: 14px; text-align: center; }
+.set-group-summary + .set-group-chev { margin-left: 0; }
+.set-group-body { padding: 4px 14px 14px 42px; border-top: 1px solid var(--border); }
+.set-group-body > .modal-label:first-child { margin-top: 10px; }
+.set-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.set-hint { font-size: 11px; color: var(--text-3); line-height: 1.5; margin-bottom: 10px; }
+.set-sub {
+  font-size: 11px; font-weight: 600; color: var(--text-2); text-transform: uppercase;
+  letter-spacing: 0.5px; margin: 14px 0 6px;
+}
+.set-group-body > .set-sub:first-child { margin-top: 12px; }
+.set-group-body > .set-hint:first-child { margin-top: 12px; }
+.set-font-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.set-font-name { width: 64px; font-size: 12px; color: var(--text-2); flex-shrink: 0; }
+.set-fonts { display: flex; gap: 5px; flex-wrap: wrap; }
+.set-fonts .btn { padding: 0 9px; height: 28px; font-size: 12px; }
+.set-group-body .fav-file { border-top: none; margin-top: 10px; padding: 0; }
+/* Save stays visible at the bottom while the dialog scrolls */
+.settings-actions {
+  position: sticky; bottom: 0; background: var(--bg-2);
+  margin: 8px -24px 0; padding: 12px 24px 18px; border-top: 1px solid var(--border);
+}
