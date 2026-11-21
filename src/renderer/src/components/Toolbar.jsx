@@ -12,6 +12,7 @@ const I = {
   speakers: <svg viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4z" /><path d="M15.54 8.46a5 5 0 0 1 0 7.07" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14" /></svg>,
   mute: <svg viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4z" /><path d="m22 9-6 6" /><path d="m16 9 6 6" /></svg>,
   chat1: <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>,
+  trans: <svg viewBox="0 0 24 24"><path d="M4 5h8M8 3v2M6 5c0 4 2.5 7 6 8" /><path d="M10 5c0 3-2.5 6.5-6 8" /><path d="M13 21l4-9 4 9M14.5 18h5" /></svg>,
   chat2: <svg viewBox="0 0 24 24"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z" /><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1" /></svg>,
   pin: <svg viewBox="0 0 24 24"><path d="M12 17v5" /><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z" /></svg>,
   expand: <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3" /><path d="M21 8V5a2 2 0 0 0-2-2h-3" /><path d="M3 16v3a2 2 0 0 0 2 2h3" /><path d="M16 21h3a2 2 0 0 0 2-2v-3" /></svg>,
@@ -86,6 +87,8 @@ export default function Toolbar({
   onOpenSettings,
   dualChat,
   onDualChatChange,
+  transPanel,
+  onToggleTransPanel,
   favorites,
   docks,
   onDockAction,
@@ -177,6 +180,12 @@ export default function Toolbar({
             { key: 'two', label: '2 czaty', icon: I.chat2, title: 'Dwa czaty obok siebie — w każdym wybierasz źródło osobno' },
           ]}
         />
+        <Seg
+          active={transPanel}
+          onClick={onToggleTransPanel}
+          title={transPanel ? 'Schowaj panel tłumaczenia (napisy wrócą na obraz)' : 'Panel tłumaczenia obok czatu: historia napisów PL z docków z CC'}
+          icon={I.trans}
+        >Tłumaczenie</Seg>
       </div>
 
       <FavoritesMenu favorites={favorites} docks={docks} onDockAction={onDockAction} />

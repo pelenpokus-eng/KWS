@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import Toolbar from './components/Toolbar'
 import DockGrid from './components/DockGrid'
 import ChatPanel from './components/ChatPanel'
+import TranslationPanel from './components/TranslationPanel'
 import SettingsModal from './components/SettingsModal'
 import MediaViewer, { classifyChatUrl } from './components/MediaViewer'
 import { DEFAULT_TUBE } from './components/Tube'
@@ -64,6 +65,9 @@ export default function App() {
   const [dualChat, setDualChat] = useState(DEFAULT_STATE.dualChat)
   const [chatConfig2, setChatConfig2] = useState(DEFAULT_STATE.chatConfig2)
   const [chatSplit, setChatSplit] = useState(DEFAULT_STATE.chatSplit)
+  // "Tłumaczenie" panel left of the chats (live caption history)
+  const [transPanel, setTransPanel] = useState(false)
+  const [transWidth, setTransWidth] = useState(340)
   // flexible 2×2 grid: where the vertical (x) and horizontal (y) lines sit
   const [gridSplit, setGridSplit] = useState(DEFAULT_STATE.gridSplit)
   // 5th stream — the camera tube on the grid's crossing point
@@ -153,6 +157,8 @@ export default function App() {
         if (typeof state.muteAll === 'boolean') setMuteAll(state.muteAll)
         if (typeof state.dualChat === 'boolean') setDualChat(state.dualChat)
         if (state.chatConfig2 && typeof state.chatConfig2 === 'object') setChatConfig2(migrateChatConfig(state.chatConfig2))
+        if (typeof state.transPanel === 'boolean') setTransPanel(state.transPanel)
+        if (typeof state.transWidth === 'number') setTransWidth(Math.max(220, Math.min(700, state.transWidth)))
         if (typeof state.chatSplit === 'number') setChatSplit(Math.max(0.2, Math.min(0.8, state.chatSplit)))
         if (typeof state.autoHideToolbar === 'boolean') setAutoHideToolbar(state.autoHideToolbar)
         if (state.extProfile === 'kws' || state.extProfile === 'main') setExtProfile(state.extProfile)
@@ -189,6 +195,8 @@ export default function App() {
         dualChat,
         chatConfig2,
         chatSplit,
+        transPanel,
+        transWidth,
         gridSplit,
         tube,
         autoHideToolbar,
@@ -196,7 +204,7 @@ export default function App() {
       })
     }, 300)
     return () => clearTimeout(t)
-  }, [docks, layout, chatConfig, activeAudioDock, multiAudio, muteAll, streamHistory, favorites, dualChat, chatConfig2, chatSplit, gridSplit, tube, autoHideToolbar, extProfile, loaded])
+  }, [docks, layout, chatConfig, activeAudioDock, multiAudio, muteAll, streamHistory, favorites, dualChat, chatConfig2, chatSplit, transPanel, transWidth, gridSplit, tube, autoHideToolbar, extProfile, loaded])
 
   // Fullscreen state comes from main (button and F11 both toggle it there)
   const [fullScreen, setFullScreen] = useState(false)
@@ -458,6 +466,8 @@ export default function App() {
         dualChat={dualChat}
         // 2nd pane starts empty (chooser) - nothing opens automatically
         onDualChatChange={setDualChat}
+        transPanel={transPanel}
+        onToggleTransPanel={() => setTransPanel(p => !p)}
         tubeOn={tube.enabled}
         onOpenStreamer={() => setShowTubeSettings(s => !s)}
         streamerOpen={showTubeSettings}
@@ -478,6 +488,7 @@ export default function App() {
 
       <div className="app-body">
         <DockGrid
+          capInPanel={transPanel}
           docks={docks}
           layout={layout}
           activeAudioDock={activeAudioDock}
@@ -496,6 +507,7 @@ export default function App() {
           favorites={favorites}
           onDockAction={handleDockAction}
         />
+        {transPanel && <TranslationPanel width={transWidth} onWidthChange={setTransWidth} />}
         <ChatPanel
           chatConfig={chatConfig}
           chatConfig2={chatConfig2}

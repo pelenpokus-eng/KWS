@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { getPlatformMeta, streamKey } from '../utils/streamParser'
 import AddStreamModal from './AddStreamModal'
+import { useCapPrefs, getCapPrefs, CAP_LANGS, CAP_TR_WAIT_MS } from '../utils/captionLog'
 
 // Twitch shows a "mature content" gate (Zacznij oglądać / Start Watching) that
 // keeps the stream paused+muted. Docks don't take mouse input, so click it for
@@ -61,6 +62,9 @@ function useYtLogin() {
   return st
 }
 
+const CAP_LINE_MS = 9000 // a finished line stays this long when nothing new is said
+const CAP_KEEP_MS = 2500 // ...but at least this long once the next sentence starts
+
 function volIcon(v) {
   if (v === 0) return '🔇'
   if (v < 34) return '🔈'
@@ -68,7 +72,7 @@ function volIcon(v) {
   return '🔊'
 }
 
-export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, muteAll, nativeMuted, streamHistory, favorites = [], onAction, single = false }) {
+export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, muteAll, nativeMuted, streamHistory, favorites = [], onAction, single = false, capInPanel = false }) {
   const containerRef = useRef(null)
   const webviewRef = useRef(null)
   const wcIdRef = useRef(null)
@@ -268,6 +272,70 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
     return (h ? h + ':' : '') + String(m).padStart(2, '0') + ':' + String(ss).padStart(2, '0')
   })() : ''
 
+  // ── Live captions (Whisper on the GPU → Google Translate → PL) ──────
+  const capKey = useRef('cap' + Math.random().toString(36).slice(2)).current
+  const [cc, setCc] = useState(false)
+  const ccRef = useRef(false)
+  ccRef.current = cc
+  const [capPrefsNow, setCapPrefs] = useCapPrefs()
+  const [capStatus, setCapStatus] = useState(null) // { status, pct, mb, error }
+  const [capLines, setCapLines] = useState([])     // finished phrases [{ id, orig, pl, draft, t }]
+  const [, setCapTick] = useState(0)
+  // draft of the phrase being spoken right now (grows ~every second, replaced
+  // by the finished line once the speaker pauses)
+  const [capPartial, setCapPartialState] = useState(null) // { gen, orig, pl, t }
+  const capPartialRef = useRef(null)
+  const setCapPartial = (v) => { capPartialRef.current = v; setCapPartialState(v) }
+  // the dock you're listening to gets live drafts more often than muted ones
+  const capAudible = !!hasAudio && !muteAll && volume > 0
+  const capTarget = () => ytEmbed ? { ytId: dock.id } : { wcId: wcIdRef.current }
+  useEffect(() => window.electronAPI?.onCapEvent?.((ev) => {
+    if (ev.key !== capKey) return
+    const p = capPartialRef.current
+    if (ev.type === 'status') setCapStatus(ev)
+    else if (ev.type === 'partial') setCapPartial({ gen: ev.gen, orig: ev.orig, pl: p?.gen === ev.gen ? p.pl : null, t: Date.now() })
+    else if (ev.type === 'partialTr') { if (p?.gen === ev.gen) setCapPartial({ ...p, pl: ev.text }) }
+    else if (ev.type === 'line') {
+      // until the final translation comes, keep showing the draft's Polish
+      const draft = p?.gen === ev.gen ? p.pl : null
+      setCapLines([{ id: ev.id, orig: ev.orig, pl: null, draft, t: Date.now(), shown: Date.now() }])
+      if (p && p.gen <= ev.gen) setCapPartial(null)
+    }
+    else if (ev.type === 'drop') { if (p && p.gen <= ev.gen) setCapPartial(null) }
+    else if (ev.type === 'tr') setCapLines(ls => ls.map(l => l.id === ev.id ? (ev.text ? { ...l, pl: ev.text, t: Date.now() } : { ...l, trFailed: true }) : l))
+  }), [])
+  useEffect(() => {
+    if (!cc) return
+    window.electronAPI?.capStart(capKey, capTarget(), { lang: capPrefsNow.lang, label: dock.label || meta.name, audible: capAudible })
+  }, [cc, capPrefsNow.lang, dock.id, ytEmbed, dock.label, capAudible])
+  useEffect(() => {
+    if (!cc) return
+    const t = setInterval(() => {
+      setCapLines(ls => ls.some(l => Date.now() - l.t > CAP_LINE_MS) ? ls.filter(l => Date.now() - l.t <= CAP_LINE_MS) : ls)
+      if (capPartialRef.current && Date.now() - capPartialRef.current.t > 6000) setCapPartial(null)
+      // the finished line gives way to the next sentence after 2.5 s on screen
+      if (capPartialRef.current) setCapLines(ls => ls.length && Date.now() - ls[0].shown > CAP_KEEP_MS ? [] : ls)
+      setCapTick(n => n + 1)
+    }, 1000)
+    return () => clearInterval(t)
+  }, [cc])
+  useEffect(() => () => { if (ccRef.current) window.electronAPI?.capStop(capKey) }, [])
+  const toggleCaptions = () => {
+    if (cc) { window.electronAPI?.capStop(capKey); setCc(false); setCapLines([]); setCapPartial(null); setCapStatus(null) }
+    else { setCapStatus({ status: 'init' }); setCc(true) }
+  }
+  const capStatusText = (() => {
+    const st = capStatus?.status
+    if (st === 'download') return `Pierwsze uruchomienie: pobieram Whisper — ${capStatus.pct}% z ${capStatus.mb} MB`
+    if (st === 'unpack') return 'Rozpakowuję Whisper…'
+    if (st === 'starting' || st === 'init') return 'Uruchamiam rozpoznawanie mowy…'
+    if (st === 'novideo') return 'Czekam na wideo w docku…'
+    if (st === 'noaudio') return 'Ten stream nie ma dźwięku do odczytania'
+    if (st === 'error') return 'Napisy: ' + (capStatus.error || 'błąd')
+    if (st === 'listening' && !capInPanel && !capLines.length && !capPartial?.pl) return 'Słucham…'
+    return ''
+  })()
+
   const reload = useCallback(() => {
     setLiveSrc('')
     setTimeout(() => setLiveSrc(playUrl), 50)
@@ -302,6 +370,7 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
         if (dock.platform === 'twitch' && qualityRef.current !== 'auto') window.electronAPI?.setTwitchQuality(id, qualityRef.current)
         if (isHlsPlayer) window.electronAPI?.setHlsQuality(id, qualityRef.current)
         if (ytWatch) window.electronAPI?.ytWatchPrep(id, qualityRef.current)
+        if (ccRef.current) window.electronAPI?.capStart(capKey, { wcId: id }, { lang: getCapPrefs().lang })
       } catch {}
     }
 
@@ -597,6 +666,39 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
         </div>
       )}
 
+      {/* live captions */}
+      {cc && !ext && (
+        <div className="dock-cc">
+          {!capInPanel && <div className="dock-cc-opts">
+            {CAP_LANGS.map(([k, label]) => (
+              <button key={k} className={capPrefsNow.lang === k ? 'on' : ''} onClick={() => setCapPrefs({ lang: k })}
+                title={k === 'auto' ? 'Język mowy wykrywany sam (też surżyk)' : `Mowa zawsze jako ${k === 'ru' ? 'rosyjski' : 'ukraiński'}`}>{label}</button>
+            ))}
+            <button className={capPrefsNow.showOrig ? 'on' : ''} onClick={() => setCapPrefs({ showOrig: !capPrefsNow.showOrig })} title="Pokazuj też tekst w oryginale">Oryginał</button>
+          </div>}
+          {capStatusText && <div className={`dock-cc-status ${capStatus?.status === 'error' ? 'err' : ''}`}>{capStatusText}</div>}
+          {/* only Polish in the main line; the original is the small grey
+              one under it ("Oryginał"). Untranslated text waits for its
+              translation — shown as original only if Google fails / is slow. */}
+          {!capInPanel && capLines.map(l => {
+            const text = l.pl || l.draft || ((l.trFailed || Date.now() - l.shown > CAP_TR_WAIT_MS) ? l.orig : null)
+            if (!text && !capPrefsNow.showOrig) return null
+            return (
+              <div className="dock-cc-line" key={l.id}>
+                {text && <span className={l.pl ? 'dock-cc-pl' : 'dock-cc-pl pending'}>{text}</span>}
+                {capPrefsNow.showOrig && text !== l.orig && <span className="dock-cc-orig">{l.orig}</span>}
+              </div>
+            )
+          })}
+          {!capInPanel && capPartial && (capPartial.pl || capPrefsNow.showOrig) && (
+            <div className="dock-cc-line live" key="live">
+              {capPartial.pl && <span className="dock-cc-pl pending">{capPartial.pl}</span>}
+              {capPrefsNow.showOrig && <span className="dock-cc-orig">{capPartial.orig}</span>}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* recording: always-visible badge + the "saved" note */}
       {rec && (
         <button className="dock-rec-badge" onClick={toggleRecording} title="Nagrywanie — kliknij, aby zatrzymać">
@@ -682,6 +784,13 @@ export default function StreamDock({ dock, dockIndex, hasAudio, multiAudio, mute
               </div>
             )}
           </div>
+
+          {/* Live Polish captions */}
+          <button
+            className={`dock-btn cc-btn ${cc ? 'on' : ''}`}
+            onClick={toggleCaptions}
+            title={cc ? 'Wyłącz napisy' : 'Napisy PL na żywo (rozpoznawanie mowy + tłumaczenie)'}
+          >CC</button>
 
           {/* Record this stream */}
           <button

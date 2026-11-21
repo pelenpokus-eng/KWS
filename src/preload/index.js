@@ -10,6 +10,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   quitApp: () => ipcRenderer.invoke('quit-app'),
   recStart: (target, label) => ipcRenderer.invoke('rec-start', target, label),
   recStop: (id) => ipcRenderer.invoke('rec-stop', id),
+  capStart: (key, target, opts) => ipcRenderer.invoke('cap-start', key, target, opts),
+  capStop: (key) => ipcRenderer.invoke('cap-stop', key),
+  onCapEvent: (cb) => {
+    const h = (_, ev) => cb(ev)
+    ipcRenderer.on('cap-event', h)
+    return () => ipcRenderer.removeListener('cap-event', h)
+  },
   showInFolder: (path) => ipcRenderer.invoke('show-in-folder', path),
   recList: () => ipcRenderer.invoke('rec-list'),
   recOpen: (path) => ipcRenderer.invoke('rec-open', path),

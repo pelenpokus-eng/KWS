@@ -8,6 +8,7 @@ import appIcon from '../../resources/icon.png?asset'
 import winHelperScript from './winhelper.ps1?raw'
 import { playerSchemePrivileges, registerPlayerProtocol } from './hlsPlayer'
 import { spawn } from 'child_process'
+import { setupCaptions } from './captions'
 
 // Enable autoplay without user gesture
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
@@ -1138,6 +1139,9 @@ app.whenReady().then(() => {
     // the poller writes the last chunks and closes the file; give up after 6 s
     setTimeout(() => recFinish(id, 'stopped'), 6000)
   })
+
+  // live captions (Whisper + Google Translate) — see captions.js
+  setupCaptions({ ipcMain, getMainWindow: () => mainWindow, findFrame: recFrame })
 
   ipcMain.handle('show-in-folder', (_, p) => { if (p) shell.showItemInFolder(String(p)) })
 

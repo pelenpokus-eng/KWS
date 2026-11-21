@@ -10,7 +10,7 @@ const clamp = (v) => Math.max(MIN, Math.min(MAX, v))
 // lines sit (0..1). The handle where they cross moves both, each line alone
 // moves one; right-click (or double-click) goes back to 50/50. The handle is
 // hidden until the pointer is over the crossing point.
-export default function DockGrid({ docks, layout, activeAudioDock, multiAudio, enabledDocks, muteAll, nativeMuted, streamHistory, favorites, onDockAction, split = { x: 0.5, y: 0.5 }, onSplitChange, tube, onTubeChange, onOpenTubeSettings, tubeFraming, onTubeFramingDone }) {
+export default function DockGrid({ capInPanel = false, docks, layout, activeAudioDock, multiAudio, enabledDocks, muteAll, nativeMuted, streamHistory, favorites, onDockAction, split = { x: 0.5, y: 0.5 }, onSplitChange, tube, onTubeChange, onOpenTubeSettings, tubeFraming, onTubeFramingDone }) {
   const gridRef = useRef(null)
   const [dragging, setDragging] = useState(null) // 'both' | 'x' | 'y'
 
@@ -42,6 +42,7 @@ export default function DockGrid({ docks, layout, activeAudioDock, multiAudio, e
     streamHistory,
     favorites,
     onAction: onDockAction,
+    capInPanel,
   })
 
   if (layout === 'single') {
