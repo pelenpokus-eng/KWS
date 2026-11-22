@@ -21,7 +21,7 @@ export const playerSchemePrivileges = {
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
 const HANDLE_RE = /^[A-Za-z0-9_.-]{1,64}$/
 
-// → { ok: true, url } | { ok: false, offline: true } | { ok: false, error }
+// → { ok: true, url, fallback } | { ok: false, offline: true } | { ok: false, error }
 async function resolveGoodzone(handle) {
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), 10000)
@@ -33,14 +33,24 @@ async function resolveGoodzone(handle) {
     if (res.status === 404) return { ok: false, error: 'Nie ma takiego kanału na goodzone.live' }
     if (!res.ok) return { ok: false, error: `goodzone.live odpowiada błędem ${res.status}` }
     const html = await res.text()
-    // the page's data is JSON embedded in a script, with escaped quotes
+    // The page embeds data as double-encoded JSON (Next.js RSC streaming via __next_f.push).
+    // Both escaped (\") and plain (") quote forms are supported.
     const m = html.match(/playbackUrl\\?"\s*:\s*\\?"(https:\/\/[^"\\\s]+\.m3u8[^"\\\s]*)/)
     if (!m) return { ok: false, offline: true }
     const url = new URL(m[1])
     if (url.hostname !== 'goodzone.live' && !url.hostname.endsWith('.goodzone.live')) {
       return { ok: false, error: 'Nieoczekiwany adres streamu' }
     }
-    return { ok: true, url: url.toString() }
+    // Also extract first entry from playbackFallbacks for immediate CDN failover
+    const mf = html.match(/playbackFallbacks\\?"\s*:\s*\[\\?"(https:\/\/[^"\\\s]+\.m3u8[^"\\\s]*)/)
+    const fallback = mf ? (() => {
+      try {
+        const fu = new URL(mf[1])
+        if (fu.hostname === 'goodzone.live' || fu.hostname.endsWith('.goodzone.live')) return fu.toString()
+      } catch {}
+      return ''
+    })() : ''
+    return { ok: true, url: url.toString(), fallback }
   } catch (e) {
     return { ok: false, error: e?.name === 'AbortError' ? 'goodzone.live nie odpowiada' : 'Brak połączenia z goodzone.live' }
   } finally {
@@ -74,6 +84,8 @@ function playerHtml(source) {
     return;
   }
 
+  if (!window.Hls || !Hls.isSupported()) { say('Brak obsługi HLS', ''); return; }
+
   // Quality from the dock's picker: auto | max | 1080 | 720 | 480 | 360
   var wanted = 'auto', hls = null;
   function applyQuality() {
@@ -89,25 +101,38 @@ function playerHtml(source) {
   }
   window.__kwsQuality = function (q) { wanted = String(q || 'auto'); applyQuality(); };
 
-  if (!window.Hls || !Hls.isSupported()) { say('Brak obsługi HLS', ''); return; }
-  hls = new Hls({ liveSyncDurationCount: 3, liveMaxLatencyDurationCount: 10, backBufferLength: 30 });
-  var mediaErrors = 0, netErrors = 0;
-  hls.on(Hls.Events.MANIFEST_PARSED, function () { applyQuality(); video.play().catch(function () {}); });
-  hls.on(Hls.Events.FRAG_BUFFERED, function () { say(''); netErrors = 0; });
-  hls.on(Hls.Events.ERROR, function (_, d) {
-    if (!d.fatal) return;
-    console.warn('[kwsplayer] fatal', d.type, d.details, d.response && d.response.code);
-    if (d.type === Hls.ErrorTypes.MEDIA_ERROR && mediaErrors++ < 3) { hls.recoverMediaError(); return; }
-    // a dropped request: keep the player, just resume loading
-    if (d.type === Hls.ErrorTypes.NETWORK_ERROR && netErrors++ < 4) { setTimeout(function () { hls.startLoad(); }, 2000); return; }
-    // stream ended / network dropped: look the channel up again (it may be offline now)
-    say('Stream przerwany', 'Ponowna próba za 5 s');
-    hls.destroy();
-    retry(5);
-  });
+  // CDN failover: try main URL, then fallback, then reload the page for fresh URLs
+  var urls = [S.url].concat(S.fallback ? [S.fallback] : []);
+  var urlIdx = 0;
+
+  function startHls(srcUrl) {
+    if (hls) { try { hls.destroy(); } catch (_) {} hls = null; }
+    var mediaErrors = 0, netErrors = 0;
+    hls = new Hls({ liveSyncDurationCount: 3, liveMaxLatencyDurationCount: 10, backBufferLength: 30 });
+    hls.on(Hls.Events.MANIFEST_PARSED, function () { applyQuality(); video.play().catch(function () {}); });
+    hls.on(Hls.Events.FRAG_BUFFERED, function () { say(''); netErrors = 0; });
+    hls.on(Hls.Events.ERROR, function (_, d) {
+      if (!d.fatal) return;
+      console.warn('[kwsplayer] fatal', d.type, d.details, d.response && d.response.code);
+      if (d.type === Hls.ErrorTypes.MEDIA_ERROR && mediaErrors++ < 3) { hls.recoverMediaError(); return; }
+      if (d.type === Hls.ErrorTypes.NETWORK_ERROR && netErrors++ < 4) { setTimeout(function () { hls.startLoad(); }, 2000); return; }
+      // This CDN failed — try fallback, or reload the page for fresh stream URLs
+      if (urlIdx + 1 < urls.length) {
+        urlIdx++;
+        say('Przełączam serwer…', '');
+        setTimeout(function () { startHls(urls[urlIdx]); }, 1000);
+        return;
+      }
+      say('Stream przerwany', 'Ponowna próba za 5 s');
+      hls.destroy();
+      retry(5);
+    });
+    hls.loadSource(srcUrl);
+    hls.attachMedia(video);
+  }
+
   say('Ładowanie…', S.handle);
-  hls.loadSource(S.url);
-  hls.attachMedia(video);
+  startHls(urls[0]);
 })();
 </script></body></html>`
 }
@@ -123,7 +148,7 @@ export function registerPlayerProtocol() {
     const handle = m ? decodeURIComponent(m[1]) : ''
     if (!HANDLE_RE.test(handle)) return new Response('Bad channel', { status: 400 })
     const r = await resolveGoodzone(handle)
-    const html = playerHtml({ handle, title: `goodzone: ${handle}`, url: r.ok ? r.url : '', offline: !!r.offline, error: r.error || '' })
+    const html = playerHtml({ handle, title: `goodzone: ${handle}`, url: r.ok ? r.url : '', fallback: r.fallback || '', offline: !!r.offline, error: r.error || '' })
     return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } })
   })
 }

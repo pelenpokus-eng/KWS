@@ -1431,12 +1431,16 @@ body.is-dragging iframe {
 
 /* Narrow windows: drop toolbar text step by step so nothing overflows */
 @media (max-width: 1840px) { .tb-logo-sub { display: none; } }
-@media (max-width: 1720px) { .tb-pill-label { display: none; } }
+@media (max-width: 1720px) {
+  .tb-pill-label { display: none; }
+  /* Streamer dock capsule goes icon-only early — both labels are long */
+  .tb-tube > span:not(.tb-ico), .tb-streamer > span:not(.tb-ico) { display: none; }
+}
 @media (max-width: 1500px) {
-  .tb-mute > span:not(.tb-ico), .tb-streamer > span:not(.tb-ico), .tb-fav > span:not(.tb-badge):not(.tb-rec-dot) { display: none; }
+  .tb-mute > span:not(.tb-ico), .tb-fav > span:not(.tb-badge):not(.tb-rec-dot) { display: none; }
 }
 @media (max-width: 1260px) {
-  .tb-switch-opt > span:not(.tb-ico), .tb-tube > span:not(.tb-ico), .tb-logo-name { display: none; }
+  .tb-switch-opt > span:not(.tb-ico), .tb-logo-name { display: none; }
 }
 
 /* ── Auto-hiding toolbar (Settings → Górny pasek) ─────────────────── */
